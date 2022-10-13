@@ -1,0 +1,282 @@
+---
+title: 'Imputation of splitted UPDRS measures'
+author: 
+- name: "Alejandro M.Carrasco"
+  affiliation: UCL
+output: 
+  html_document:
+    css: ./font/missingexploration_fontsize.css
+    code_folding: hide
+    theme: paper
+    highlight: kate
+    df_print: paged
+    fontsize: 20pt
+    toc: true
+    toc_float: true
+    number_sections: true
+---
+
+```{r setup, include=FALSE}
+library(tidyverse)      # For tidy manipulation of data
+library(here)           # For file path construction
+library(DT)             # To display data tables
+library(readxl)         # To read excel files
+library(VIM)            # For missing data exploration
+library(kableExtra)     # For fancy data frame display
+library(ggpubr)         # To display ggboxplots
+library(naniar)         # reaplce values with NAs on dfs
+theme_rhr <-  theme_bw(base_family = "Helvetica") + 
+  theme(panel.grid.major.x = element_blank(),
+        legend.position = "right",
+        strip.text = element_text(size = 8),
+        strip.text.y = element_text(angle = 90),
+        axis.text.x = element_text(size = 8, angle = 90, hjust = 1, vjust = 0.5),
+        axis.text.y = element_text(size = 8),
+        axis.title.y = element_text(vjust = 0.6),
+        axis.title = element_text(size = 10),
+        panel.spacing = unit(0.1, "lines"))
+knitr::opts_chunk$set(echo = T, warning = F, message= F)
+
+```
+
+
+
+# Description
+
+At this stage we want to retrieve as many measures as possible for each time point. We will use the same strategy from the methods described in here: https://www.ncbi.nlm.nih.gov/pmc/articles/PMC5072275/ 
+Sometimes, when patients miss even a single measure, the UPDRS_III total score is reported as missing. We will get less stringent and we will consider NAs measures only when patients miss more than 80% of the total terms over each MDS-UPDRS III derived outcomes (MDS-UPDRS III total, limb, and axial).
+We will explore missingness of our outcome variable in order to understand whether data is MAR, MCAR or MNAR, and whether we can impute our data further with any software such as MICE.
+
+
+
+# Data load
+
+We load on out workspace all the data we are going to process
+
+```{r}
+Discovery_FU <- (read.csv("~/Data/WorkingDirectory/OPDC/clinical_data/Discovery_FU_data_with_onset_2021_04.csv"))
+P3_TPD <- as_tibble(read.csv("~/Data/WorkingDirectory/PROBAND/clinical_data/P3_TPD_Version2_temp_06_16_2020.csv"))
+PPMI_UPDRS<- as_tibble(read.csv("/home/amcalejandro/Data/WorkingDirectory/PPMI/clinical_data/MDS_UPDRS_Part_III.csv"))
+PPMI_PD_IDs <- read.delim("/home/amcalejandro/Data/WorkingDirectory/PPMI/clinical_data/PD_IDs.txt", header=FALSE) 
+PPMI_Original_Cohort <- read.csv("/home/amcalejandro/Data/WorkingDirectory/PPMI/clinical_data/PPMI_Original_Cohort_BL_to_Year_5_Dataset_Apr2020.csv")
+PDSTAT_UPDRS <-  readxl::read_xlsx("/home/amcalejandro/Data/WorkingDirectory/PDSTAT/clinical_data/FUP_Export_CRF_MDSUPDRS_PartIII_Off.xlsx")
+DIGPD <- readxl::read_xlsx("/home/amcalejandro/Data/WorkingDirectory/DIGPD_DATA/dig_pd_2019_11_Alejandro.xlsx")
+
+```
+
+
+# Description
+
+In this section, for each of the cohorts we are going to explore how MDS-UPDRS III total is missing (whether MAR, MCAR, or MNAR)
+
+
+
+
+# MDS-UPODRS III total missingness exploration - TPD
+
+```{r}
+TPD_PDonly <- P3_TPD %>% 
+  filter(change_diagnosis == "")
+
+# First, explore the missing data rates for the UPDRS variable with data in wide format.
+# On a first step, we can have a look at the missingness rate for UPDRS_total
+TPD_PDonly_updrstotal <- TPD_PDonly %>%
+  select(ID, V1_UPDRS_III_total, V4_UPDRS_III_total, 
+         V7_UPDRS_III_total, V9_UPDRS_III_total, V10_UPDRS_III_total, 
+         V11_UPDRS_III_total, age_V1, age_V4, age_V7, disease_duration_diag_V1, gender)
+
+# Looking at the missing data distribution here
+summary(TPD_PDonly_updrstotal[,2:ncol(TPD_PDonly_updrstotal)])
+
+# Exploring missing data patterns
+#md.pattern(TPD_PDonly_updrstotal)
+
+aggr_data <- aggr(TPD_PDonly_updrstotal, col=c('navyblue','red'), numbers=TRUE, sortVars=TRUE, 
+                  labels= names(TPD_PDonly_updrstotal), cex.axis=.5, 
+                  gap=3, oma = c(10,5,5,3),
+                  ylab=c("Histogram of missing data","Pattern"))
+
+# Plostting and looking at missing data, with a special interest in combinations
+#plot(aggr_data) ;
+summary(aggr_data)
+
+
+marginplot(TPD_PDonly_updrstotal[,c("V4_UPDRS_III_total","V7_UPDRS_III_total")])
+
+
+#Looking at the distribution of missing and observed data
+marginplot(TPD_PDonly_updrstotal[,c("age_V1", "V7_UPDRS_III_total")], delimiter="_imp", alpha=0.6, pch=c(19))
+marginplot(TPD_PDonly_updrstotal[,c("age_V1", "V4_UPDRS_III_total")], delimiter="_imp", alpha=0.6, pch=c(19))
+
+
+marginplot(TPD_PDonly_updrstotal[,c("disease_duration_diag_V1", "V7_UPDRS_III_total")], delimiter="_imp", alpha=0.6, pch=c(19), col = c("skyblue", "red"))
+marginplot(TPD_PDonly_updrstotal[,c("disease_duration_diag_V1", "V4_UPDRS_III_total")], delimiter="_imp", alpha=0.6, pch=c(19), col = c("skyblue", "red"))
+
+
+marginplot(TPD_PDonly_updrstotal[,c("gender","V7_UPDRS_III_total")], delimiter="_imp", alpha=0.6, pch=c(19), col = c("skyblue", "red"))
+marginplot(TPD_PDonly_updrstotal[,c("gender", "V4_UPDRS_III_total")], delimiter="_imp", alpha=0.6, pch=c(19), col = c("skyblue", "red"))
+
+
+
+
+```
+
+
+# OPDC - MDS-UPDRS III total missingness exploration
+
+```{r}
+# First we get the UPDRSIII total available and then we transform them into long format
+# to study the UDPRS total 
+
+# Filtering df
+OPDC_updrstotal <- Discovery_FU %>%
+  select(subjid, visit, UPDRS_III,age_diag,
+         gender) %>%
+  filter(visit %in% 1:3)
+
+# We then reshape to study
+OPDC_updrstotal_wide <- OPDC_updrstotal %>%
+  reshape(., idvar = "subjid", v.names = "UPDRS_III", timevar = "visit", direction= "wide") 
+
+
+# Now we get the disease duration, and the MOCA variable
+OPDC_updrstotal_wide = OPDC_updrstotal_wide %>%
+  inner_join(Discovery_FU %>% 
+               select(subjid, visit,
+                      disease_duration_onset,
+                      MOCA_total_adj) %>%
+               filter(visit == 1) %>%
+               dplyr::select(-visit), by = c("subjid"))
+
+
+OPDC_updrstotal_wide <- OPDC_updrstotal_wide %>%
+  select(order(colnames(OPDC_updrstotal_wide)))
+
+# Exploring missing data patterns
+#md.pattern(OPDC_updrstotal_wide)
+
+# Work out the name axes
+aggr_data <- aggr(OPDC_updrstotal_wide, col=c('navyblue','red'), numbers=TRUE,
+                  sortVars=TRUE, 
+                  labels= names(OPDC_updrstotal_wide), cex.axis=.5, 
+                  gap=3, oma = c(10,5,5,3),
+                  ylab=c("Histogram of missing data","Pattern"))
+
+
+
+summary(aggr_data)
+
+
+#Looking at the distribution of missing and observed data
+marginplot(OPDC_updrstotal_wide[,c("UPDRS_III.1","UPDRS_III.2")])
+
+
+#Looking at the distribution of missing and observed data
+marginplot(OPDC_updrstotal_wide[,c("age_diag", "UPDRS_III.2")], delimiter="_imp", alpha=0.6, pch=c(19))
+marginplot(OPDC_updrstotal_wide[,c("age_diag", "UPDRS_III.3")], delimiter="_imp", alpha=0.6, pch=c(19))
+
+
+marginplot(OPDC_updrstotal_wide[,c("disease_duration_onset", "UPDRS_III.2")], delimiter="_imp", alpha=0.6, pch=c(19), col = c("skyblue", "red"))
+marginplot(OPDC_updrstotal_wide[,c("disease_duration_onset", "UPDRS_III.3")], delimiter="_imp", alpha=0.6, pch=c(19), col = c("skyblue", "red"))
+
+
+marginplot(OPDC_updrstotal_wide[,c("gender","UPDRS_III.2")], delimiter="_imp", alpha=0.6, pch=c(19), col = c("skyblue", "red"))
+marginplot(OPDC_updrstotal_wide[,c("gender", "UPDRS_III.3")], delimiter="_imp", alpha=0.6, pch=c(19), col = c("skyblue", "red"))
+
+marginplot(OPDC_updrstotal_wide[,c("MOCA_total_adj","UPDRS_III.2")], delimiter="_imp", alpha=0.6, pch=c(19), col = c("skyblue", "red"))
+marginplot(OPDC_updrstotal_wide[,c("MOCA_total_adj", "UPDRS_III.3")], delimiter="_imp", alpha=0.6, pch=c(19), col = c("skyblue", "red"))
+```
+
+
+# PPMI - MDS-UPDRS III total missingness exploration
+
+```{r}
+PD_IDs <- gsub("[^0-9]", "", PPMI_PD_IDs$V1) %>% as.integer()
+
+
+PPMI_Original_Cohort = PPMI_Original_Cohort %>%
+  filter(PATNO %in% PD_IDs) 
+
+PPMI_Original_Cohort_filt = PPMI_Original_Cohort %>%
+  select(PATNO, EVENT_ID, updrs3_score,
+         agediag, gen) 
+
+PPMI_Original_Cohort_filt_wide = PPMI_Original_Cohort_filt %>%
+   reshape(., idvar = "PATNO", v.names = "updrs3_score" , timevar = "EVENT_ID", 
+          direction = "wide", sep = "_")
+  
+
+# Now we get the disease duration, and the MOCA variable
+PPMI_Original_Cohort_filt_wide  = PPMI_Original_Cohort_filt_wide %>%
+  inner_join(PPMI_Original_Cohort %>% 
+               select(PATNO, EVENT_ID,
+                      duration,
+                      moca) %>%
+               filter(EVENT_ID == "BL") %>%
+               dplyr::select(-EVENT_ID), by = c("PATNO"))
+
+
+
+# Exploring missing data patterns
+#md.pattern(OPDC_updrstotal_wide)
+
+# Work out the name axes
+aggr_data <- aggr(PPMI_Original_Cohort_filt_wide, col=c('navyblue','red'), numbers=TRUE,
+                  sortVars=TRUE, 
+                  labels= names(PPMI_Original_Cohort_filt_wide), cex.axis=.5, 
+                  gap=3, oma = c(10,5,5,3),
+                  ylab=c("Histogram of missing data","Pattern"))
+
+# Plostting and looking at missing data, with a special interest in combinations
+#plot(aggr_data) ; 
+summary(aggr_data)
+
+
+# For a brief comparison, to keep consistent the missingness exploration strategy with the done for ProBanD and OPDC
+# we will only compare the outcome variables at 18 and 36 months.
+
+#Looking at the distribution of missing and observed data
+marginplot(PPMI_UPDRS_PD_wide[,c("updrs3_score_V06","updrs3_score_V08")])
+
+
+#Looking at the distribution of missing and observed data
+marginplot(PPMI_Original_Cohort_filt_wide[,c("agediag", "updrs3_score_V06")], delimiter="_imp", alpha=0.6, pch=c(19))
+marginplot(PPMI_Original_Cohort_filt_wide[,c("agediag", "updrs3_score_V08")], delimiter="_imp", alpha=0.6, pch=c(19))
+
+
+marginplot(PPMI_Original_Cohort_filt_wide[,c("duration", "updrs3_score_V06")], delimiter="_imp", alpha=0.6, pch=c(19), col = c("skyblue", "red"))
+marginplot(PPMI_Original_Cohort_filt_wide[,c("duration", "updrs3_score_V08")], delimiter="_imp", alpha=0.6, pch=c(19), col = c("skyblue", "red"))
+
+
+marginplot(PPMI_Original_Cohort_filt_wide[,c("gender","updrs3_score_V06")], delimiter="_imp", alpha=0.6, pch=c(19), col = c("skyblue", "red"))
+marginplot(PPMI_Original_Cohort_filt_wide[,c("gender", "updrs3_score_V08")], delimiter="_imp", alpha=0.6, pch=c(19), col = c("skyblue", "red"))
+
+marginplot(PPMI_Original_Cohort_filt_wide[,c("gen","updrs3_score_V06")], delimiter="_imp", alpha=0.6, pch=c(19), col = c("skyblue", "red"))
+marginplot(PPMI_Original_Cohort_filt_wide[,c("gen", "updrs3_score_V08")], delimiter="_imp", alpha=0.6, pch=c(19), col = c("skyblue", "red"))
+
+
+
+```
+
+
+
+# Conclussion
+
+We have seen how, as expected, as the time increases patients withdraw from the study.
+In order to determine how the data is missing, explored the MDS-UPDRS III outcome missingness against the following demographics and clinical outcome
+  - Gender
+  - Age at diagnosis
+  - Disease duration
+  - MOCA
+
+We used VIM R pakcage to do explore missingness.
+We did not find any cluster in the data missingness, suggesting data MAR.
+
+Missing data did not cluster across any demopgrahic or MOCA we assessed in any of the cohorts
+
+We conclude data is MCAR. Therefore, we can procede and impute missing data with the les than 20% missingness approach
+
+
+
+
+

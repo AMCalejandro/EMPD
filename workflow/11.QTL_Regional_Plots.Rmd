@@ -1,0 +1,309 @@
+---
+title: "Untitled"
+author: "AMCalejandro"
+date: "28/3/2022"
+output: html_document
+---
+
+
+```{r}
+.libPaths("/data/kronos/kronos/acarrasco/R_libs/")
+library(colochelpR)
+library(data.table)
+library(tidyverse)
+library(coloc)
+library(biomaRt)
+library(DT)
+library(ggpubr)
+library(SNPlocs.Hsapiens.dbSNP144.GRCh37)
+```
+
+
+```{r}
+# Also, loading the Regina's function for plotting
+plot_coloc_hits <- function(coloc_hits, eQTL_GWAS_to_plot, facet_labels = NULL, 
+                            figure_labels = NULL, theme_base_size = 10,
+                            var_name = "gene"){
+  
+  plot_list <- vector(mode = "list", length = length(coloc_hits))
+  
+  # Setting facet labels
+  if(is.null(facet_labels)){
+    
+    labels <- c(pvalue_gwas = "pvalue_gwas", pvalue_eqtl = "pvalue_eqtl")
+    
+  } else{
+    
+    labels <- facet_labels 
+    
+  }
+  
+  # Setting figure labels
+  if(is.null(figure_labels)){
+    
+    figure_labels <- NULL
+    print(str_c("No figure labels provided, so no figure labels assigned."))
+    
+  } else{
+    
+    figure_labels <- figure_labels 
+    
+  }
+  
+  # Figure loop
+  for(i in 1:length(coloc_hits)){
+   
+    chr <- 
+      eQTL_GWAS_to_plot %>% 
+      dplyr::filter(.data[[var_name]] %in% coloc_hits[i]) %>% 
+      .[["chr"]] %>% 
+      unique
+    
+    plot_list[[i]] <- 
+      eQTL_GWAS_to_plot %>% 
+      dplyr::filter(.data[[var_name]] %in% coloc_hits[i]) %>% 
+      ggplot(aes(x = pos_mb, y = log_pval)) +
+      geom_point(size = 0.7, alpha = 0.3) +
+      facet_wrap(vars(Dataset, .data[[var_name]]), ncol = 1, scale = "free", labeller=labeller(Dataset = labels)) +
+      labs(x = str_c("Chromosome ", chr, " position (Mb)"), y = "-log10(p-value)") +
+      theme_bw(base_size = theme_base_size) +
+      theme(panel.grid.major.y = element_blank(),
+            panel.grid.minor.y = element_blank())
+    
+  }
+  
+  ggpubr::ggarrange(plotlist = plot_list, 
+            # ncol = 2,
+            labels = figure_labels, 
+            align = "hv",
+            common.legend = TRUE, 
+            legend = "none")
+  
+}
+```
+
+
+# Loading eQTL and gwas data
+
+```{r}
+PsychEncode <- fread("/mnt/rreal/RDS/acarrasco/COLLABS/DATA/PsychEncode/Full_hg19_cis-eQTL_rsID_MAF.txt")
+eQTLgene <- fread("/mnt/rreal/RDS/acarrasco/COLLABS/DATA/eQTLgen/Full_eQTLgen_rsID.MAF.txt")
+gwas = fread("/mnt/rreal/RDS/acarrasco/ANALYSES_WORKSPACE/EARLY_PD/POST_GWAS/AXIAL_modelBasic/COLOC/harmonised_axial_GWAS.txt")
+
+tQTL = fread("/mnt/rreal/RDS/acarrasco/COLLABS/DATA/DER-10c_hg19_tQTL.all.txt")
+iQTL = fread("/mnt/rreal/RDS/acarrasco/COLLABS/DATA/DER-10a_hg19_isoQTL.significant.txt")
+
+tQTL$transcript_id = gsub("\\..*", "", tQTL$transcript_id)
+iQTL$transcript_id = gsub("\\..*", "", iQTL$transcript_id)
+```
+
+
+```{r}
+results_psychEncode <- merge_coloc_summaries("RESULTS_PSYCHENC/", add_signif_SNP = F, recursive = T, pattern = ".rda")
+
+results_eQTLgene <- merge_coloc_summaries("RESULTS_eQTLgene",  add_signif_SNP = F, recursive = T, pattern = ".rda")
+```
+
+
+```{r}
+
+mart = useMart(biomart = "ensembl", dataset = "hsapiens_gene_ensembl") 
+
+
+mapping <- getBM(attributes = c("hgnc_symbol", "ensembl_gene_id"),  
+                           filters = "ensembl_gene_id",  
+                           values = results_psychEncode$Gene_2,  
+                           mart = mart)  
+
+results_psychEncode <- results_psychEncode %>% 
+  inner_join(mapping,by = c("Gene_2" = "ensembl_gene_id")) %>% relocate(hgnc_symbol, .after = Gene_2)   
+
+
+results_eQTLgene <- merge_coloc_summaries("RESULTS_eQTLgene",  add_signif_SNP = F, recursive = T, pattern = ".rda")
+
+
+mapping <- getBM(attributes = c("hgnc_symbol", "ensembl_gene_id"),  
+                           filters = "ensembl_gene_id",  
+                           values = results_eQTLgene$Gene_2,  
+                           mart = mart)  
+
+results_eQTLgene <- results_eQTLgene  %>% 
+  inner_join(mapping,by = c("Gene_2" = "ensembl_gene_id")) %>% relocate(hgnc_symbol, .after = Gene_2)   
+```
+
+
+Filtering MAD1L1 data
+```{r}
+coloc_ens <- results_psychEncode %>% dplyr::filter(hgnc_symbol == "MAD1L1")
+
+# We filter the PsychEncode eQTL data for LRP1B
+PsychEncode_filtered_eQTL <- PsychEncode %>% dplyr::filter(Gene %in% coloc_ens$Gene_2) 
+
+
+coloc_ens <- results_eQTLgene %>% dplyr::filter(hgnc_symbol == "MAD1L1")
+# We filter the PsychEncode eQTL data for LRP1B
+eQTLgene_filtered_eQTL <- eQTLgene %>% dplyr::filter(Gene %in% coloc_ens$Gene_2) 
+
+
+# Given the transcript id, we take the HGNC symbol and the ensembl gene_id
+ensembl <- useEnsembl(biomart = "genes", dataset = "hsapiens_gene_ensembl")
+
+
+mapping <- getBM(attributes = c("ensembl_gene_id", "ensembl_transcript_id", "hgnc_symbol"),
+                 filters = "ensembl_gene_id", values = "ENSG00000002822",
+                 mart = ensembl)
+
+
+PsychEncode_filtered_tQTL  <- tQTL %>%
+   dplyr::filter(transcript_id %in% mapping$ensembl_transcript_id)
+PsychEncode_filtered_iQTL$hgnc_symbol = "MAD1L1"
+PsychEncode_filtered_iQTL$Gene = "ENSG00000002822"
+
+
+PsychEncode_filtered_iQTL  <- iQTL %>%
+   dplyr::filter(transcript_id %in% mapping$ensembl_transcript_id)
+PsychEncode_filtered_iQTL$hgnc_symbol = "MAD1L1"
+PsychEncode_filtered_iQTL$Gene = "ENSG00000002822"
+
+
+```
+
+
+
+```{r}
+# PsychEncode data
+eQTL_Psych_GWAS_joined <- setNames(PsychEncode_filtered_eQTL %>% group_split(Gene), PsychEncode_filtered_eQTL %>% .[["Gene"]] %>% unique() %>% sort())  %>% 
+  lapply(., function(eQTL_gene_df) { colochelpR::join_coloc_datasets(df1 = gwas %>% dplyr::filter(!duplicated(SNP)), df2 = eQTL_gene_df, harmonise = F ) })
+
+
+dbSNP = SNPlocs.Hsapiens.dbSNP144.GRCh37
+
+####  tQTL ####
+PsychEncode_filtered_tQTL <- PsychEncode_filtered_tQTL %>% separate(SNP_id, into=c("CHR","BP"), remove=F) 
+PsychEncode_filtered_tQTL = PsychEncode_filtered_tQTL %>% dplyr::select(-strand) %>% convert_loc_to_rs(., dbSNP = dbSNP)
+
+# In here, we split the data according to transcripts. 
+# For each transcript we have a set of genes.
+tQTL_Psych_GWAS_joined <- setNames(PsychEncode_filtered_tQTL %>% group_split(transcript_id), PsychEncode_filtered_tQTL %>% .[["transcript_id"]] %>% unique() %>% sort())  %>% 
+  lapply(., function(eQTL_gene_df) { colochelpR::join_coloc_datasets(df1 = gwas %>% dplyr::filter(!duplicated(SNP)), df2 = eQTL_gene_df, harmonise = F ) })
+
+# We make sure we work with no null lists, which are lists that have overlapped SNP information
+tQTL_Psych_GWAS_joined_filt = tQTL_Psych_GWAS_joined[!unlist(purrr::map(tQTL_Psych_GWAS_joined, ~nrow(.x) < 50))] %>%
+  discard(is.null)
+
+
+#### iQTL ####
+PsychEncode_filtered_iQTL <- PsychEncode_filtered_iQTL %>% separate(SNP_id, into=c("CHR","BP"), remove=F) 
+PsychEncode_filtered_iQTL = PsychEncode_filtered_iQTL %>% dplyr::select(-strand) %>% convert_loc_to_rs(., dbSNP = dbSNP)
+
+iQTL_Psych_GWAS_joined <- setNames(PsychEncode_filtered_iQTL %>% group_split(transcript_id), PsychEncode_filtered_iQTL %>% .[["transcript_id"]] %>% unique() %>% sort())  %>% 
+  lapply(., function(eQTL_gene_df) { colochelpR::join_coloc_datasets(df1 = gwas %>% dplyr::filter(!duplicated(SNP)), df2 = eQTL_gene_df, harmonise = F ) })
+
+iQTL_Psych_GWAS_joined_filt = 
+iQTL_Psych_GWAS_joined[!unlist(purrr::map(iQTL_Psych_GWAS_joined, ~nrow(.x) < 50 ))] %>%
+  discard(is.null)
+
+
+#eQTL gene data
+eQTL_eQTLgene_GWAS_joined <- setNames(eQTLgene_filtered_eQTL %>% group_split(Gene), eQTLgene_filtered_eQTL %>% .[["Gene"]] %>% unique() %>% sort())  %>% 
+  lapply(., function(eQTL_gene_df) { colochelpR::join_coloc_datasets(df1 = gwas %>% dplyr::filter(!duplicated(SNP)), df2 = eQTL_gene_df, harmonise = F ) })
+```
+
+
+```{r}
+# PsychEnc data
+
+# eQTL
+eQTL_GWAS_Psych <- eQTL_Psych_GWAS_joined %>% qdapTools::list_df2df() %>% 
+  dplyr::select(SNP,chr = CHR_1, pos = BP_1, gene = Gene_2, pvalue_gwas =
+                  p.value_1, pvalue_eqtl = p.value_2) %>%
+    dplyr::inner_join(results_psychEncode %>% 
+                        dplyr::select(gene = Gene_2, hgnc_symbol)) %>%  
+  tidyr::gather(key = "Dataset", value = "p.value", -SNP, -gene, -hgnc_symbol,
+                -chr, -pos) %>% 
+  dplyr::mutate(pos_mb = as.numeric(pos) / 1000000, log_pval = 
+                  -log10(p.value)) 
+
+
+# tQTL
+tQTL_GWAS = tQTL_Psych_GWAS_joined_filt %>% qdapTools::list_df2df() %>%
+  dplyr::select(TRANSCRIPT = X1, SNP, chr = CHR_1, pos = BP_1, gene = Gene_2,
+                pvalue_gwas = p.value_1, pvalue_eqtl = nominal_pval_2) %>%
+  dplyr::mutate(hgnc_symbol = "MAD1L1") %>% 
+  tidyr::gather(key = "Dataset", value = "p.value", -TRANSCRIPT, -SNP, -gene,
+                -hgnc_symbol, -chr, -pos)  %>%
+  dplyr::mutate(pos_mb = as.numeric(pos) / 1000000, log_pval =
+                  -log10(p.value))
+  
+
+# iQTL
+iQTL_GWAS = iQTL_Psych_GWAS_joined_filt %>% qdapTools::list_df2df() %>%
+  dplyr::select(TRANSCRIPT = X1, SNP, chr = CHR_1, pos = BP_1, gene = Gene_2,
+                pvalue_gwas = p.value_1, pvalue_eqtl = nominal_pval_2) %>%
+  dplyr::mutate(hgnc_symbol = "MAD1L1") %>% 
+  tidyr::gather(key = "Dataset", value = "p.value", -TRANSCRIPT, -SNP, -gene,
+                -hgnc_symbol, -chr, -pos)  %>%
+  dplyr::mutate(pos_mb = as.numeric(pos) / 1000000, log_pval =
+                  -log10(p.value))
+  
+
+
+# eQTLgene data
+eQTL_GWAS_eQTLgene <- eQTL_eQTLgene_GWAS_joined %>% 
+  qdapTools::list_df2df() %>% 
+  dplyr::select(SNP, chr = CHR_1, pos = BP_1, gene = Gene_2, pvalue_gwas =
+                  p.value_1, pvalue_eqtl = p.value_2) %>%
+    dplyr::inner_join(results_eQTLgene %>% 
+                        dplyr::select(gene = Gene_2, hgnc_symbol)) %>%  
+  tidyr::gather(key = "Dataset", value = "p.value", -SNP, -gene, -hgnc_symbol,
+                -chr, -pos) %>% 
+  dplyr::mutate(pos_mb = as.numeric(pos) / 1000000, log_pval = 
+                  -log10(p.value)) 
+
+```
+
+
+
+```{r}
+plot_eQTL_GWAS_psych <- 
+  plot_coloc_hits(coloc_hits = coloc_ens[["Gene_2"]],
+                  eQTL_GWAS_to_plot = eQTL_GWAS_Psych,
+                  facet_labels = c(pvalue_gwas = "EM_PD",
+                                   pvalue_eqtl="eQTL_PsychEncode")) 
+png(file = "REGIONAL_PLOTS/plot_eQTLGWAS_psychEncode.png",width=4.25,height=4.25,units="in",res=800)
+plot_eQTL_GWAS_psych
+dev.off()
+
+plot_iQTL_GWAS_psych <- 
+  plot_coloc_hits(coloc_hits = unique(iQTL_GWAS$TRANSCRIPT),
+                  eQTL_GWAS_to_plot = iQTL_GWAS,
+                  facet_labels = c(pvalue_gwas = "EM_PD",
+                                   pvalue_eqtl="iQTL_PsychEncode"),
+                  var_name = "TRANSCRIPT") 
+
+png(file = "REGIONAL_PLOTS/plot_iQTLGWAS_psychEncode.png", width=6.25,height=6.25,units="in",res=800)
+plot_iQTL_GWAS_psych
+dev.off()
+
+plot_tQTL_GWAS_psych <- 
+  plot_coloc_hits(coloc_hits = unique(tQTL_GWAS$TRANSCRIPT),
+                  eQTL_GWAS_to_plot = tQTL_GWAS,
+                  facet_labels = c(pvalue_gwas = "EM_PD",
+                                   pvalue_eqtl="tQTL_PsychEncode"),
+                  var_name = "TRANSCRIPT")
+png(file = "REGIONAL_PLOTS/plot_tQTLGWAS_psychEncode.png",width=5.25,height=5.25,units="in",res=800)
+plot_tQTL_GWAS_psych
+dev.off()
+
+plot_eQTL_GWAS_eQTLgene <- 
+  plot_coloc_hits(coloc_hits = coloc_ens[["Gene_2"]],
+                  eQTL_GWAS_to_plot = eQTL_GWAS_eQTLgene,
+                  facet_labels = c(pvalue_gwas = "EM-PD",
+                                   pvalue_eqtl="eQTL eQTLGen")) 
+
+png(file = "REGIONAL_PLOTS/plot_eQTLGWAS_eQTLgene.png", width=4.25,height=4.25,units="in",res=800)
+plot_eQTL_GWAS_eQTLgene
+dev.off()
+
+```
+

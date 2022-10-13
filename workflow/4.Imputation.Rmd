@@ -1,0 +1,430 @@
+---
+title: 'Imputation of splitted UPDRS measures'
+author: 
+- name: "Alejandro M.Carrasco"
+  affiliation: UCL
+output: 
+  html_document:
+    css: ./font/missingexploration_fontsize.css
+    code_folding: hide
+    theme: paper
+    highlight: kate
+    df_print: paged
+    fontsize: 20pt
+    toc: true
+    toc_float: true
+    number_sections: true
+---
+
+```{r setup, include=FALSE}
+library(tidyverse)      # For tidy manipulation of data
+library(here)           # For file path construction
+library(DT)             # To display data tables
+library(readxl)         # To read excel files
+library(naniar)         # reaplce values with NAs on dfs
+library(tableHTML)      # To generate nice html formatted table
+theme_rhr <-  theme_bw(base_family = "Helvetica") + 
+  theme(panel.grid.major.x = element_blank(),
+        legend.position = "right",
+        strip.text = element_text(size = 8),
+        strip.text.y = element_text(angle = 90),
+        axis.text.x = element_text(size = 8, angle = 90, hjust = 1, vjust = 0.5),
+        axis.text.y = element_text(size = 8),
+        axis.title.y = element_text(vjust = 0.6),
+        axis.title = element_text(size = 10),
+        panel.spacing = unit(0.1, "lines"))
+knitr::opts_chunk$set(echo = T, warning = F, message= F)
+
+```
+
+
+# Description
+
+Following up on the Rmarkdown number 3, we determined data to be missing completely at random.
+Therefore, we decided to impute the data based on the 20% approach
+
+Nevertheless, we noticed that one item in PD-STAT MDS-UPDRS III was MNAR. 
+We took this into account in the imputation process.
+
+# Data load
+
+We load on out workspace all the data we are going to process
+
+```{r}
+Discovery_FU <- (read.csv("~/Data/WorkingDirectory/OPDC/clinical_data/Discovery_FU_data_with_onset_2021_04.csv"))
+P3_TPD <- as_tibble(read.csv("~/Data/WorkingDirectory/PROBAND/clinical_data/P3_TPD_Version2_temp_06_16_2020.csv"))
+TPD_imputed0.8 <- read.csv("../Data_processed/clinicalData_Imputed/TPD_0.8.imputed.txt")
+PPMI_UPDRS<- as_tibble(read.csv("/home/amcalejandro/Data/WorkingDirectory/PPMI/clinical_data/MDS_UPDRS_Part_III.csv"))
+PPMI_PD_IDs <- read.delim("/home/amcalejandro/Data/WorkingDirectory/PPMI/clinical_data/PD_IDs.txt", header=FALSE) 
+PDSTAT_UPDRS <-  readxl::read_xlsx("/home/amcalejandro/Data/WorkingDirectory/PDSTAT/clinical_data/FUP_Export_CRF_MDSUPDRS_PartIII_Off.xlsx")
+DIGPD <- readxl::read_xlsx("/home/amcalejandro/Data/WorkingDirectory/DIGPD_DATA/dig_pd_2019_11_Alejandro.xlsx")
+
+PPMI_Original_Cohort <- read.csv("/home/amcalejandro/Data/WorkingDirectory/PPMI/clinical_data/PPMI_Original_Cohort_BL_to_Year_5_Dataset_Apr2020.csv")
+
+source(here::here("R", "utils", "utils.R"))
+```
+
+
+### MDS UPDRS III total, limb and axial imputation
+
+
+```{r}
+TPD_PDonly <- P3_TPD %>% 
+  filter(change_diagnosis == "")
+
+visits_interest <- c("1","4","7")
+TPD_PDonly_3visits  <- TPD_PDonly %>% 
+  select(ID, gender, age_onset,
+         ends_with(c(paste0("age_V", visits_interest), 
+                     paste0("disease_duration_diag_V",visits_interest))),
+         contains(c("time", paste0("V", visits_interest, "_", "UPDRS_III"))),
+         -ends_with("total")) 
+
+# Conveting to long format
+TPD_PDonly_3visits_long <- TPD_PDonly_3visits %>% 
+  gather(UPDRSIII_measure, score ,starts_with("V")) %>% 
+  mutate(visit_number = str_sub(UPDRSIII_measure, 2, 2)) 
+
+
+TPD_PDonly_3visits_long_updrsIII_imputed <- impute_UPDRSIII(df = TPD_PDonly_3visits_long, 
+                                                           ID = "ID", 
+                                                           score_column = "score", 
+                                                           visit_column = "visit_number",
+                                                           UPDRSIII_column = "UPDRSIII_measure",
+                                                           UPDRS_type = c("total", "axial", "limb"))
+
+write.csv(TPD_PDonly_3visits_long_updrsIII_imputed, 
+          "../Data_processed/clinicalData_Imputed/TPD_0.8.imputed.txt", 
+          quote = FALSE, row.names = FALSE) # 
+
+
+visits_interest <- c("1","4","7", "9", "10", "11")
+TPD_PDonly_AllVisits  <- TPD_PDonly %>% 
+  select(ID, gender, age_onset,
+         ends_with(c(paste0("age_V", visits_interest), 
+                     paste0("disease_duration_diag_V",visits_interest))),
+         contains(c("time", paste0("V", visits_interest, "_", "UPDRS_III"))),
+         -ends_with("total")) 
+
+# Conveting to long format
+TPD_PDonly_AllVisits_long <- TPD_PDonly_AllVisits %>% 
+  gather(UPDRSIII_measure, score ,starts_with("V")) %>% 
+  #mutate(visit_number = str_sub(UPDRSIII_measure, 2, 2)) 
+  mutate(visit_number = str_extract(UPDRSIII_measure, regex("(\\d+)")))
+
+TPD_PDonly_AllVisits_long_updrsIII_imputed <- impute_UPDRSIII(df = TPD_PDonly_AllVisits_long, 
+                                                           ID = "ID", 
+                                                           score_column = "score", 
+                                                           visit_column = "visit_number",
+                                                           UPDRSIII_column = "UPDRSIII_measure",
+                                                           UPDRS_type = c("total", "axial", "limb"))
+
+write.csv(TPD_PDonly_AllVisits_long_updrsIII_imputed, 
+          "../Data_processed/clinicalData_Imputed/TPD_0.8.imputed.AllVisits.txt", 
+          quote = FALSE, row.names = FALSE)
+
+```
+
+
+### OPDC imputation
+
+
+```{r}
+# Imputing the values
+Discovery_FU_3visits <- Discovery_FU %>%
+  select(subjid, visit, gender, age_onset, age_diag, age, UPDRS_III,
+         visit, starts_with("af_3"), -contains(c("3_a","3_b", "3_c"))) %>%
+  filter(visit %in% 1:3)
+
+# Converting to long format
+Discovery_FU_3visits_long <- Discovery_FU_3visits %>% 
+  gather(UPDRSIII_measure, score ,starts_with("af_")) 
+
+OPDC_3visits_long_updrsIII_imputed <- impute_UPDRSIII(df = Discovery_FU_3visits_long, 
+                                                           ID = "subjid", 
+                                                           score_column = "score", 
+                                                           visit_column = "visit",
+                                                           UPDRSIII_column = "UPDRSIII_measure",
+                                                           UPDRS_type = c("total", "axial", "limb"))
+
+write.csv(OPDC_3visits_long_updrsIII_imputed, 
+          "../Data_processed/clinicalData_Imputed/OPDC_0.8.imputed.txt", 
+          quote = FALSE, row.names = FALSE)
+
+
+# We get all the scores up to 90 months for a further exploration of the rate of progression
+Discovery_FU_all <- Discovery_FU %>%
+  select(subjid, visit, gender, age_onset, age_diag, age, UPDRS_III,
+         visit, starts_with("af_3"), -contains(c("3_a","3_b", "3_c"))) %>%
+  filter(visit %in% 1:7)
+
+# Converting to long format
+Discovery_FU_all_long <- Discovery_FU_all %>% 
+  gather(UPDRSIII_measure, score ,starts_with("af_")) 
+
+OPDC_all_long_updrsIII_imputed <- impute_UPDRSIII(df = Discovery_FU_all_long, 
+                                                           ID = "subjid", 
+                                                           score_column = "score", 
+                                                           visit_column = "visit",
+                                                           UPDRSIII_column = "UPDRSIII_measure",
+                                                           UPDRS_type = c("total", "axial", "limb"))
+
+write.csv(OPDC_all_long_updrsIII_imputed,
+          "../Data_processed/clinicalData_Imputed/OPDC_0.8.imputed.AllVisits.txt", 
+          quote = FALSE, row.names = FALSE)
+
+```
+
+
+
+### PPMI imputation
+
+```{r}
+# Keeping PD only and renaming a misspelled variable
+PD_IDs <- gsub("[^0-9]", "", PPMI_PD_IDs$V1) %>% as.integer()
+PPMI_UPDRS_PD <- subset(PPMI_UPDRS, PATNO %in% PD_IDs)
+colnames(PPMI_UPDRS_PD)[17] <- "NP3RIGRL"
+
+
+PPMI_UPDRS_PD_3 <- PPMI_UPDRS_PD %>% 
+  filter((EVENT_ID %in% c("BL", paste0("V0",1:8)))) %>%
+  gather(UPDRSIII_measure, score ,starts_with("NP3"))  
+
+PPMI_long_updrsIII_imputed <- impute_UPDRSIII(df = PPMI_UPDRS_PD_3,
+                                                           ID = "PATNO", 
+                                                           score_column = "score", 
+                                                           visit_column = "EVENT_ID",
+                                                           UPDRSIII_column = "UPDRSIII_measure",
+                                                           UPDRS_type = c("total", "axial", "limb"))
+
+
+PPMI_long_updrsIII_imputed <- PPMI_long_updrsIII_imputed %>% 
+  mutate(UPDRSIII_measure_total = str_remove(UPDRSIII_measure_total, "."),
+         UPDRSIII_measure_axial = str_remove(UPDRSIII_measure_axial, "."),
+         UPDRSIII_measure_limb = str_remove(UPDRSIII_measure_limb, "."))
+
+write.csv(PPMI_long_updrsIII_imputed, 
+          "../Data_processed/clinicalData_Imputed/PPMI_0.8.imputed.txt", 
+          quote = FALSE, row.names = FALSE)
+
+
+
+# Now we get data for all the visits
+PPMI_UPDRS_PD_all<- PPMI_UPDRS_PD %>%
+  filter(!EVENT_ID %in% c("SC", "ST", "PW", "U01")) %>%
+  gather(UPDRSIII_measure, score ,starts_with("NP3")) 
+
+
+PPMI_long_updrsIII_all_imputed <- impute_UPDRSIII(df = PPMI_UPDRS_PD_all_age,
+                                                           ID = "PATNO", 
+                                                           score_column = "score", 
+                                                           visit_column = "EVENT_ID",
+                                                           UPDRSIII_column = "UPDRSIII_measure",
+                                                           UPDRS_type = c("total", "axial", "limb"))
+
+PPMI_long_updrsIII_all_imputed <- PPMI_long_updrsIII_all_imputed %>% 
+  mutate(UPDRSIII_measure_total = str_remove(UPDRSIII_measure_total, "."),
+         UPDRSIII_measure_axial = str_remove(UPDRSIII_measure_axial, "."),
+         UPDRSIII_measure_limb = str_remove(UPDRSIII_measure_limb, "."))
+
+write.csv(PPMI_long_updrsIII_all_imputed, "../Data_processed/clinicalData_Imputed/PPMI_0.8.imputed.AllVisits.txt", quote = FALSE, row.names = FALSE) # 
+```
+
+
+## PD-STAT imputation
+
+For PDSTAT we have UPDRS III measures spaced 12 months instead of 18 months as for the previous cohorts.
+Furthermore, we only have data up to 24 months from BL. We use the three data points available ( BL, 12m, 24m)
+
+Worth noting that : "In PD STAT, one item of the MDS-UPDRS part III was erroneously omitted from case report forms at all time-points. Question 15 should consist of two items, a score for postural tremorfor each of the left and right hands. However, only one item response could be recorded and the case report form did not specify, or request specification of, which hand. For a small proportion of participants, the assessor manually annotated the case report forms and included postural tremor scores for the left and right hand. In these instances, the scores for both left and right hands will be used as part of the calculation of the primary outcome. However, if a participant only has one postural tremor score, the second postural tremor score will be treated as missing data (not at random). "
+
+
+```{r}
+source(here::here("R", "imputation_UPDRS.R"))
+
+PDSTAT_UPDRS_3visits_tremorHands  <- PDSTAT_UPDRS %>% 
+  select(StudyNumber, starts_with("M"), 
+         -ends_with(c("Total","PNC",
+                      "Missing","DyskinesiasPresent",
+                      "DyskinesiaMovementsIntefere", "HAndYStage"))) %>%
+  mutate(
+    M00_MDSUPDRS_PartIII_Off_PosturalTremorHandsRight = case_when(
+      ((M00_MDSUPDRS_PartIII_Off_PosturalTremorHandsRight == 999) & 
+         (M00_MDSUPDRS_PartIII_Off_PosturalTremorHandsLeft == 999)) ~ M00_MDSUPDRS_PartIII_Off_PosturalTremorHands,
+     ((M00_MDSUPDRS_PartIII_Off_PosturalTremorHandsRight != 999) & 
+         (M00_MDSUPDRS_PartIII_Off_PosturalTremorHandsLeft != 999)) ~ M00_MDSUPDRS_PartIII_Off_PosturalTremorHandsRight),
+    
+    M12_MDSUPDRS_PartIII_Off_PosturalTremorHandsRight = case_when(
+      ((M12_MDSUPDRS_PartIII_Off_PosturalTremorHandsRight == 999) & 
+       (M12_MDSUPDRS_PartIII_Off_PosturalTremorHandsLeft == 999)) ~ M12_MDSUPDRS_PartIII_Off_PosturalTremorHands,
+       ((M12_MDSUPDRS_PartIII_Off_PosturalTremorHandsRight != 999) & 
+         (M12_MDSUPDRS_PartIII_Off_PosturalTremorHandsLeft != 999)) ~ M12_MDSUPDRS_PartIII_Off_PosturalTremorHandsRight),
+    
+    M24_MDSUPDRS_PartIII_Off_PosturalTremorHandsRight = case_when(
+      ((M24_MDSUPDRS_PartIII_Off_PosturalTremorHandsRight == 999) & 
+       (M24_MDSUPDRS_PartIII_Off_PosturalTremorHandsLeft == 999)) ~ M24_MDSUPDRS_PartIII_Off_PosturalTremorHands,
+      ((M24_MDSUPDRS_PartIII_Off_PosturalTremorHandsRight != 999) & 
+         (M24_MDSUPDRS_PartIII_Off_PosturalTremorHandsLeft != 999)) ~ M24_MDSUPDRS_PartIII_Off_PosturalTremorHandsRight)
+    ) %>%
+  select(-ends_with("PosturalTremorHands"))
+
+
+# Getting the df to look at the proportion of missingness before imputation
+PDSTAT_UPDRS_3visits_UPDRStotal  <- PDSTAT_UPDRS %>% 
+  select(StudyNumber, ends_with("Total"))
+
+
+# Check we only have 33 scores
+PDSTAT_UPDRS_3visits_tremorHands %>% select(starts_with("M00")) %>% length()
+  
+PDSTAT_UPDRS_3visits_tremorHands_long <- PDSTAT_UPDRS_3visits_tremorHands %>% 
+  gather(UPDRSIII_measure, score ,starts_with("M")) %>% 
+  mutate(visit_number = str_sub(UPDRSIII_measure, 2, 3),
+         UPDRSIII_measure = gsub("^.*_", "", UPDRSIII_measure)) %>%
+  naniar::replace_with_na_all(condition = ~.x == 999) # We set 999 as NA
+
+
+# In our case, one score for postural tremor of the hands is consistently missing
+# We use this score for limb and total outcome. Therefore, we will have to adjust the
+# missingness allowance according to having one variable consistently missing.
+
+
+PDSTAT_3visits_imputed_newThreshold <- impute_UPDRSIII(df = PDSTAT_UPDRS_3visits_tremorHands_long, 
+                                                           ID = "StudyNumber", 
+                                                           score_column = "score", 
+                                                           visit_column = "visit_number",
+                                                           UPDRSIII_column = "UPDRSIII_measure",
+                                                           UPDRS_type = c("total", "axial", "limb"),
+                                                           missing_threshold = c(3,2,1))
+
+write.csv(PDSTAT_3visits_imputed_newThreshold, "../Data_processed/clinicalData_Imputed/PDSTAT_0.8.imputed.txt",  
+          quote = FALSE, row.names = FALSE) 
+
+```
+
+
+## DIGPD imputation
+
+
+```{r}
+# Attaching the function
+source(here::here("R", "imputation_UPDRS.R"))
+
+DIGPD_3visits <- DIGPD %>% filter(visite %in% 1:4) %>% 
+  dplyr::mutate(across(starts_with("MOTOREX"), ~ as.numeric(.x)))
+
+# Getting data needed in wide format for further missingnesss exploration
+DIGPD_wide <- DIGPD_3visits %>% 
+  select(PATIENT, visite, SCOREIII) %>% mutate(visite = as.character(visite)) %>% as.data.frame() %>%
+  stats::reshape(., idvar = "PATIENT", v.names = "SCOREIII", timevar = "visite", 
+                 varying = list(c("SCOREIII_1", "SCOREIII_2", "SCOREIII_3", "SCOREIII_4")), direction= "wide") 
+
+# Converting to long format
+DIGPD_3visits_long <- DIGPD_3visits %>% 
+  gather(UPDRSIII_measure, score ,starts_with("MOTOREXAM")) 
+
+DIGPD_3visits_long_updrsIII_imputed <- impute_UPDRSIII(df = DIGPD_3visits_long, 
+                                                           ID = "PATIENT", 
+                                                           score_column = "score", 
+                                                           visit_column = "visite",
+                                                           UPDRSIII_column = "UPDRSIII_measure",
+                                                           UPDRS_type = c("total", "axial", "limb"))
+
+
+
+# Comment out if not existing
+write.csv(DIGPD_3visits_long_updrsIII_imputed, "../Data_processed/clinicalData_Imputed/DIGPD_0.8.imputed.txt", quote = FALSE, row.names = FALSE)
+
+
+DIGPD_all <- DIGPD %>% 
+  dplyr::mutate(across(starts_with("MOTOREX"), ~ as.numeric(.x)))
+
+# Getting data needed in wide format for further missingnesss exploration
+DIGPD_wide_all <- DIGPD_all %>% 
+  select(PATIENT, visite, SCOREIII) %>% mutate(visite = as.character(visite)) %>% as.data.frame() %>%
+  stats::reshape(., idvar = "PATIENT", v.names = "SCOREIII", timevar = "visite", 
+                 varying = list(c("SCOREIII_1", "SCOREIII_2", "SCOREIII_3", "SCOREIII_4",
+                                  "SCOREIII_5","SCOREIII_6", "SCOREIII_7")), direction= "wide") 
+
+# Converting to long format
+DIGPD_all_long <- DIGPD_all %>% 
+  gather(UPDRSIII_measure, score ,starts_with("MOTOREXAM")) 
+
+DIGPD_all_long_updrsIII_imputed <- impute_UPDRSIII(df = DIGPD_all_long, 
+                                                           ID = "PATIENT", 
+                                                           score_column = "score", 
+                                                           visit_column = "visite",
+                                                           UPDRSIII_column = "UPDRSIII_measure",
+                                                           UPDRS_type = c("total", "axial", "limb"))
+
+write.csv(DIGPD_all_long_updrsIII_imputed, "../Data_processed/clinicalData_Imputed/DIGPD_0.8.imputed.AllVisits.txt", quote = FALSE, row.names = FALSE)
+```
+
+
+
+# Generate tables to explore the missingness rates before and after imputation
+
+```{r}
+
+# Missingness after imputation
+# ProBanD
+TPD_missprop_afterIMputation <- TPD_PDonly_3visits_long_updrsIII_imputed %>% 
+  group_by(visit_number) %>%
+  dplyr::summarise(across(c("UPDRSIIItotal_imputed"), ~ (sum(is.na(.x)) + (1963 - n())) / 1963))
+# OPDC
+OPDC_missprop_afterIMputation <- OPDC_3visits_long_updrsIII_imputed %>% 
+  group_by(visit) %>%
+  dplyr::summarise(across(c("UPDRSIIItotal_imputed"), ~ (sum(is.na(.x)) + (963 - n())) / 963))
+# PPMI
+PPMI_missprop_afterIMputation <- PPMI_long_updrsIII_imputed %>% 
+  group_by(EVENT_ID) %>%
+  dplyr::summarise(across(c("UPDRSIIItotal_imputed"), ~ (sum(is.na(.x)) + (415 - n())) / 415))
+#PDSTAT
+PDSTAT_missprop_afterImputation <- PDSTAT_3visits_tremoshands_long_updrsIII_imputed_newThreshold %>%
+  group_by(visit_number) %>%
+  dplyr::summarise(across(c("UPDRSIIItotal_imputed"), ~ (sum(is.na(.x)) + (174 - n())) / 174))
+#DIGPD
+DIGPD_missprop_afterImputation <- DIGPD_3visits_long_updrsIII_imputed  %>%
+  group_by(visite) %>%
+  dplyr::summarise(across(c("UPDRSIIItotal_imputed"), ~ (sum(is.na(.x)) + (415 - n())) / 415))
+
+
+# Cohorts with 18 months spaced data available
+imputation_summary = data.frame(t(data.frame("PROBAND" = sapply(TPD_PDonly_updrstotal, function(x) sum(is.na(x)) / length(x))[2:4],
+                                  "OPDC" = sapply(OPDC_updrstotal_wide, function(x) sum(is.na(x)) / length(x))[2:4],
+                                  "PPMI" = sapply(PPMI_UPDRS_PD_wide[, c(2,7,10)], function(x) sum(is.na(x)) / length(x)),
+                                  "PROBAND" = TPD_missprop_afterIMputation$UPDRSIIItotal_imputed,
+                                  "OPDC" = OPDC_missprop_afterIMputation$UPDRSIIItotal_imputed,
+                                  "PPMI" = PPMI_missprop_afterIMputation$UPDRSIIItotal_imputed[c(1,6,8)],
+                                  row.names = c("BL","18 months","36 months")))) %>% 
+  rownames_to_column(var = "Cohort") %>% as_tibble() %>%
+  mutate_if(is.numeric, round, digits=4) 
+# Some wrangling
+imputation_summary$Cohort <- str_remove(imputation_summary$Cohort, "[\\.].*")
+
+tableHTML(imputation_summary, 
+          rownames = FALSE, 
+          row_groups = list(c(3, 3), c('Before imputation', "After imputation")),
+          second_headers = list(c(1, 4), c('Imputation status', 'missing rate at different time points')),
+          collapse = 'separate') #%>% tableHTML_to_image(file = "/home/alejandromc/Kronos_downloads/prueba",type = "jpeg")
+
+
+# Cohorts with 12 months spaced data available
+imputation_summary_2 = data.frame(t(data.frame("PDSTAT" =
+                                                 c(sapply(PDSTAT_UPDRS_3visits_UPDRStotal, function(x) sum(is.na(x)) / length(x))[2:4],NA),
+                                               "DIGPD" = sapply(DIGPD_wide, function(x) sum(is.na(x)) / length(x))[2:5],
+                                               "PDSTAT" = c(PDSTAT_missprop_afterImputation$UPDRSIIItotal_imputed, NA),
+                                               "DIGPD" = DIGPD_missprop_afterImputation$UPDRSIIItotal_imputed,
+                                               row.names = c("BL","12 months","24 months", "36 months")))) %>%
+  rownames_to_column(var = "Cohort") %>% as_tibble() %>%
+  mutate_if(is.numeric, round, digits=4) 
+
+imputation_summary_2$Cohort <- str_remove(imputation_summary_2$Cohort, "[\\.].*")  
+
+tableHTML(imputation_summary_2, 
+          rownames = FALSE, 
+          row_groups = list(c(2, 2), c('Before imputation', "After imputation")),
+          second_headers = list(c(1, 5), c('Imputation status', 'missing rate at different time points')),
+          collapse = 'separate') #%>% tableHTML_to_image(file = "/home/alejandromc/Kronos_downloads/prueba",type = "jpeg")
+
+```

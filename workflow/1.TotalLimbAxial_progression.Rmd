@@ -1,0 +1,196 @@
+---
+title: "UPDRSIII.sobgroups_progression"
+author: "AMCalejandro"
+date: "23/7/2021"
+output: html_document
+---
+
+
+```{r setup, include=FALSE}
+library(tidyverse)      # For tidy manipulation of data
+library(here)           # For file path construction
+library(DT)             # To display data tables
+library(readxl)         # To read excel files
+theme_rhr <-  theme_bw(base_family = "Helvetica") + 
+  theme(panel.grid.major.x = element_blank(),
+        legend.position = "right",
+        strip.text = element_text(size = 8),
+        strip.text.y = element_text(angle = 90),
+        axis.text.x = element_text(size = 8, angle = 90, hjust = 1, vjust = 0.5),
+        axis.text.y = element_text(size = 8),
+        axis.title.y = element_text(vjust = 0.6),
+        axis.title = element_text(size = 10),
+        panel.spacing = unit(0.1, "lines"))
+knitr::opts_chunk$set(echo = T, warning = F, message= F)
+```
+
+> Aim: We want to study the differences in the progression of the MDS-UPDRS III derived outcomes ( total, limb and axial)
+
+
+# Description
+
+In order to see the rate of progression of the different PD motor symptoms, we are going to plot the mean MDS-UPDRS III derived outcomes for PPMI, PROBAND and OPDC across different time points. 
+To do so, we are going to use the limb, axial, and total outcome variables that were scaled up on the workflow 2.MissingnessExploration.Imputation_part1.
+
+# Ploting the differences in progression
+
+Look at the difference in progression for the MDS-UPDRSIII derived measures 
+
+# Data load
+
+```{r}
+# Three visits only
+TPD_PDonly_3visits_long_updrsIII_imputed <- read.csv("../Data_processed/clinicalData_Imputed/TPD_0.8.imputed.txt")
+OPDC_3visits_long_updrsIII_imputed <- read.csv("../Data_processed/clinicalData_Imputed/OPDC_0.8.imputed.txt")
+PPMI_long_updrsIII_imputed <- read.csv("../Data_processed/clinicalData_Imputed/PPMI_0.8.imputed.txt")
+DIGPD_long_updrsIII_imputed <- read.csv("../Data_processed/clinicalData_Imputed/DIGPD_0.8.imputed.txt")
+PDSTAT_long_updrsIII_imputed <- read.csv("../Data_processed/clinicalData_Imputed/PDSTAT_0.8.imputed.txt")
+PDBP = readRDS("../Data_processed/Rfiles_modelFitting.automationOutline/PDBP/PDBP_final.rds")[1:8]
+
+# All visits up to 90 months
+TPD_PDonly_AllVisits_long_updrsIII_imputed <- read.csv("../Data_processed/clinicalData_Imputed/TPD_0.8.imputed.AllVisits.txt")
+OPDC_AllVisits_updrsIII_imputed <- read.csv("../Data_processed/clinicalData_Imputed/OPDC_0.8.imputed.AllVisits.txt")
+PPMI_AllVisits_long_updrsIII_imputed <- read.csv("../Data_processed/clinicalData_Imputed/PPMI_0.8.imputed.AllVisits.txt")
+DIGPD_AllVisits_long_updrsIII_imputed <- read.csv("../Data_processed/clinicalData_Imputed/DIGPD_0.8.imputed.AllVisits.txt")
+
+
+```
+
+# Data processing
+
+```{r}
+TPD_PDonly_3visits_long_updrsIII_imputed <- TPD_PDonly_3visits_long_updrsIII_imputed %>%
+  dplyr::mutate(visit_number = recode(visit_number, `1` = "0", `4` = "1.5", `7` = "3")) %>%
+  dplyr::rename(visit = visit_number) %>%
+  dplyr::mutate(DF = "TPD")
+
+OPDC_3visits_long_updrsIII_imputed <- OPDC_3visits_long_updrsIII_imputed %>%
+  dplyr::mutate(visit = recode(visit, `1` = "0", `2` = "1.5", `3` ="3")) %>%
+  dplyr::rename(ID = subjid) %>%
+  dplyr::mutate(DF = "OPDC") %>%
+  as_tibble()
+
+PPMI_long_updrsIII_imputed <- PPMI_long_updrsIII_imputed %>%
+  dplyr::filter(EVENT_ID %in% c("BL","V05","V08")) %>%
+  dplyr::mutate(EVENT_ID = (recode(EVENT_ID, "BL" = "0", "V05" = "1.5", "V08" = "3"))) %>%
+  dplyr::rename(c(visit = EVENT_ID, ID = PATNO)) %>%
+  dplyr::mutate(DF = "PPMI")
+
+DIGPD_long_updrsIII_imputed <- DIGPD_long_updrsIII_imputed %>%
+  dplyr::mutate(visite = (recode(visite, `1` = "0", `2` = "1", `3` = "2", `4`="3"))) %>%
+  dplyr::rename(ID = PATIENT) %>%
+  dplyr::rename(visit = visite) %>%
+  dplyr::mutate(DF = "DIGPD")
+
+PDSTAT_long_updrsIII_imputed <- PDSTAT_long_updrsIII_imputed %>%
+  dplyr::mutate(visit_number = recode(visit_number, `0` = "0", `12` = "1", `24` = "2" ))  %>%
+  dplyr::rename(ID = StudyNumber) %>%
+  dplyr::rename(visit = visit_number) %>%
+  dplyr::mutate(DF = "PDSTAT")
+
+PDBP <- PDBP %>%
+  dplyr::filter(visit_month %in% c(0,12,18, 24,36)) %>%
+  dplyr::mutate(visit_month = recode(visit_month, `0` = "0", `12` = "1", `18` = "1.5", `24` = "2", `36` = "3" ))  %>%
+  dplyr::rename(visit = visit_month) %>%
+  dplyr::mutate(DF = "PDBP") %>%
+  group_by(ID) %>% filter(!n() == 1) %>% ungroup()
+
+merged <- rbind(TPD_PDonly_3visits_long_updrsIII_imputed, OPDC_3visits_long_updrsIII_imputed,
+                PPMI_long_updrsIII_imputed, DIGPD_long_updrsIII_imputed,
+                PDSTAT_long_updrsIII_imputed, PDBP)
+```
+
+
+# Get the motor scores trayectories across cohorts
+
+
+```{r}
+my_mean = function(x) { mean(x, na.rm = T)}
+my_sd = function(x) {sd(x, na.rm = T)}
+meanAcrossVisits <- merged %>%
+  group_by(visit, DF) %>%
+  dplyr::summarise(across(ends_with("imputed"), list(mean = my_mean, sd = my_sd), .names = "{.col}.{.fn}")) %>%
+  ungroup() %>%
+  gather(UPDRS_type, score, -visit, -DF) %>%
+  extract(UPDRS_type, c("UPDRS_type", "Metric"), "(.*)\\.(.*)") %>%
+  spread(Metric, score) %>%
+  mutate(UPDRS_type = 
+           stringi::stri_replace_all_regex(UPDRS_type,
+                                           pattern = c("UPDRSIIItotal_imputed", "UPDRSIIIlimb_imputed", "UPDRSIIIaxial_imputed"),
+                                           replacement = c("Total", "Limb", "Axial"), vectorize = FALSE),
+         DF = factor(DF, levels = c("TPD", "OPDC", "PPMI", "DIGPD", "PDSTAT", "PDBP")),
+         visit = factor(visit, levels = c("0", "1","1.5", "2", "3")))
+
+a = ggplot(meanAcrossVisits, aes(x = as.numeric(as.character(visit)), y = mean, color = UPDRS_type)) +
+  geom_point(size = 5 ) +
+  geom_line(size = 1.1) +
+  geom_errorbar(aes(ymin = mean - sd, ymax = mean + sd),
+                size = 0.5, width = .1)  +
+  facet_wrap(vars(DF), scales = "free") +
+
+  
+  theme_bw(base_size = 10) +
+  labs(x = "Years", y = "MDS-UPDRS III Scores") +
+  ggtitle("Average change in MDS-UPDRS III motor scores ") +
+  theme(
+    text = element_text(size = 35),
+    plot.title = element_text(hjust = 0.5, size = 40, face = "bold", margin = margin(b = 20)),
+    legend.title = element_text(size = 25),
+    axis.title.x = element_text(margin = margin(t = 20), size = 40), 
+    axis.title.y = element_text(margin = margin(r = 20), size = 40),
+    strip.text = element_text(size=30))
+
+
+png(file = "/home/amcalejandro/Kronos_downloads/motorscores_trayextpory.png", width=15,height=15,units="in",res=800)
+a
+dev.off()
+```
+
+
+# Furhter exploration up to 90 months from BL
+
+Visualise the trayectories for longer period in TPD and OPDC
+
+```{r}
+# We modify the visit values for TPD to match with the OPDC df
+TPD_PDonly_AllVisits_long_updrsIII_imputed <- TPD_PDonly_AllVisits_long_updrsIII_imputed %>% 
+  dplyr::mutate(visit_number = recode(visit_number, `4` = 2L, `7` = 3L, `9` = 4L, `10` = 5L, `11` = 6L)) %>%
+  dplyr::rename(visit = visit_number) %>%
+  dplyr::mutate(DF = "TPD")
+
+OPDC_AllVisits_updrsIII_imputed <- OPDC_AllVisits_updrsIII_imputed %>%
+  dplyr::rename(ID = subjid) %>%
+  dplyr::mutate(DF = "OPDC") %>%
+  as_tibble()
+
+
+merged_OPDC.TPD <- rbind(TPD_PDonly_AllVisits_long_updrsIII_imputed, OPDC_AllVisits_updrsIII_imputed)
+
+
+TPD_Scaledmeans <- merged_OPDC.TPD %>%
+  group_by(visit) %>%
+  mutate_at(c("UPDRSIIItotal_imputed", "UPDRSIIIaxial_imputed", "UPDRSIIIlimb_imputed" ), ~scale(., center = FALSE)) %>%
+  summarise(across(ends_with("imputed"), ~ mean(.x, na.rm = TRUE))) %>%
+  ungroup() %>%
+  gather(UPDRS_type, score, -visit)
+
+
+ggplot(TPD_Scaledmeans, aes(x = visit, y = score, group = UPDRS_type, color = UPDRS_type)) +
+  geom_point(size = 5 ) +
+  geom_line(size = 1.1) +
+  geom_errorbar(aes(ymin = mean - sd, ymax = mean + sd),
+                size = 0.5, width = .1)  +
+  facet_wrap(vars(DF), scales = "free") +
+  
+  theme_bw(base_size = 10) +
+  labs(x = "Years", y = "MDS-UPDRS III Scores") +
+  ggtitle("Average change in MDS-UPDRS III motor scores ") +
+  theme(
+    text = element_text(size = 35),
+    plot.title = element_text(hjust = 0.5, size = 40, face = "bold", margin = margin(b = 20)),
+    legend.title = element_text(size = 25),
+    axis.title.x = element_text(margin = margin(t = 20), size = 40), 
+    axis.title.y = element_text(margin = margin(r = 20), size = 40),
+    strip.text = element_text(size=30))
+```
+

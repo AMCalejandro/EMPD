@@ -1,0 +1,604 @@
+---
+title: 'Model generation'
+author: 
+- name: "Alejandro M.Carrasco"
+  affiliation: UCL
+output: 
+  html_document:
+    code_folding: hide
+    theme: paper
+    highlight: kate
+    df_print: paged
+    toc: true
+    toc_float: true
+    number_sections: true
+---
+
+
+```{r setup, include=FALSE}
+library(tidyverse)      # For tidy manipulation of data
+library(here)           # For file path construction
+library(DT)             # To display data tables
+library(readxl)         # To read excel files
+library(stringr)        # To do string operations
+library(kableExtra)     # To display fancy tables
+library(psych)          # For data description
+library(lme4)           # For mixed models generation
+library(plyr)
+library(MuMIn)
+library(ggplot2)
+library(performance)
+library(see)
+
+theme_rhr <-  theme_bw(base_family = "Helvetica") +
+  theme(panel.grid.major.x = element_blank(),
+        legend.position = "right",
+        strip.text = element_text(size = 8),
+        strip.text.y = element_text(angle = 90),
+        axis.text.x = element_text(size = 8, angle = 90, hjust = 1, vjust = 0.5),
+        axis.text.y = element_text(size = 8),
+        axis.title.y = element_text(vjust = 0.6),
+        axis.title = element_text(size = 10),
+        panel.spacing = unit(0.1, "lines"))
+knitr::opts_chunk$set(echo = T, warning = F, message= F)
+
+```
+
+```{r}
+getwd()
+```
+
+
+> Aim: Using the different imputed UPDRSIII subgroups together with covariates to adjust a mixed effects model.
+
+
+# Description
+
+In this section, we use TPD cohort to explore the set of predictors that makes the model best according to R2, AIC, and BIC.
+
+
+
+# Data loading
+
+```{r}
+# ProBanD specific data for the pre model fitting analysis
+TPD_outcome <- read.csv("../Data_processed/clinicalData_Imputed/TPD_0.8.imputed.txt", sep = ",", header = TRUE)
+TPD_final <- readRDS("../Data_processed/Rfiles_modelFitting.automationOutline/PROBAND/TPD_final.rds")
+TPD_PCs <- read.table("~/Data/WorkingDirectory/GITHUB_REPOS/early_PDprogression/Data_processed/Rfiles_modelFitting.automationOutline/PCA.eigenvec", quote="\"", comment.char="")
+TPD_final_all = readRDS("../Data_processed/Rfiles_modelFitting.automationOutline/PROBAND/TPD_final_allVisits.rds")
+TPD_PCs_eigenval <- scan(file = "~/Data/WorkingDirectory/GITHUB_REPOS/early_PDprogression/Data_processed/Rfiles_modelFitting.automationOutline/PCA.eigenval")
+TPD_PCs <- TPD_PCs[, -1] 
+colnames(TPD_PCs) <- c("FID_IID", "PC1", "PC2", "PC3", "PC4", "PC5", "PC6", "PC7", "PC8", "PC9", "PC10")
+
+TPD_LEDDadjusted <- readRDS("~/Data/WorkingDirectory/GITHUB_REPOS/early_PDprogression/Data_processed/ledd_adjusted/TPD_LEDDadjusted_final.rds")
+
+```
+
+
+# Check the best combintion of PCs.
+We want to get the set of PCs that explaing most of the genetic variance to effectively account for population structure
+
+
+```{r}
+pve <- data.frame(PC = 1:10, pve = TPD_PCs_eigenval / sum(TPD_PCs_eigenval)*100)
+a <- ggplot(pve, aes(x = PC, y = pve)) + 
+  geom_bar(stat = "identity", aes(fill = PC)) +
+  theme(axis.text = element_text(size=20),
+        legend.position = "none",
+        axis.title.y = element_text(size = 20, face = "bold", 
+                                    margin = margin(t = 0, r = 5, b = 0, l = 0)),
+        axis.title.x = element_text(size = 20, face = "bold", 
+                                    margin = margin(t = 5, r = 0, b = 0 , l = 0)),
+        plot.title = element_text(hjust = 0.5, size = 30, face = "bold",
+                                  margin = margin(t = 10, r = 0, b = 10, l = 0))) + 
+  scale_x_continuous(breaks = seq(0,10,1), expand = c(0,0)) +
+  scale_y_continuous(breaks=seq(0,15,1), expand = c(0, 0)) +
+  ggtitle("Percentage of variance each PC explains")
+
+a
+ggsave(filename = "/home/alejandromc/Kronos_downloads/test.png", width = 10, height = 10, device='tiff', dpi=300)
+
+cat("Total variance explained by the first 8 PCs", sum(pve$pve[1:8]))
+```
+
+
+
+# Explore differences whether using AAD, AAO or AAB as predictors
+
+We conclude from this output that the variable that correlates the most with our outcome variables is age_diag hence, age_diag var should be added as fixed term on our fixed effects models instead of age_onset
+
+```{r}
+completeFun <- function(data, desiredCols) {
+  completeVec <- complete.cases(data[, desiredCols])
+  return(data[completeVec, ])
+}
+
+# An alternative is to set up this threshold at 3
+TPD_wide <- TPD_final %>% select(-c(UPDRSIII_measure_total,UPDRSIII_measure_limb, UPDRSIII_measure_axial)) %>%
+  reshape(direction = "wide", idvar = "ID", 
+           timevar = "visit_number",
+           v.names = c("UPDRSIIItotal_imputed", "UPDRSIIIaxial_imputed", "UPDRSIIIlimb_imputed", "disease_duration_diag", "age"))
+
+
+vars_interest <- c("age_onset", "age_onset_imput", "age_diag",
+                   "UPDRSIIItotal_imputed.1", "UPDRSIIItotal_imputed.4","UPDRSIIItotal_imputed.7",
+                   "UPDRSIIIlimb_imputed.1", "UPDRSIIIlimb_imputed.4", "UPDRSIIIlimb_imputed.7",
+                   "UPDRSIIIaxial_imputed.1", "UPDRSIIIaxial_imputed.4", "UPDRSIIIaxial_imputed.7" )
+
+TPD_wide_complete_V1 <- completeFun(TPD_wide, vars_interest) %>%
+  select(all_of(vars_interest))
+
+TPD_P3_corr <- cor(TPD_wide_complete_V1)
+corrplot::corrplot(TPD_P3_corr)
+
+TPD_P3_corr
+
+```
+
+
+# Look at disease duration and AAD correlation
+
+```{r}
+completeFun <- function(data, desiredCols) {
+  completeVec <- complete.cases(data[, desiredCols])
+  return(data[completeVec, ])
+}
+
+columns_match <- grep(paste(c("1","4","7"), collapse = "|"), colnames(TPD_wide))
+
+TPD_wide_complete_V2 <- completeFun(TPD_wide, colnames(TPD_wide[columns_match])) %>%
+  select(all_of(columns_match))
+
+TPD_P3_corr <- cor(TPD_wide_complete_V2)
+corrplot::corrplot(TPD_P3_corr)
+```
+
+
+# Minor data processing
+
+```{r}
+# Scaling and centering quantitative vars
+TPD_final_OutomeCovarsPCs <- TPD_PCs %>%
+  inner_join(TPD_final) %>%
+  ddply(., c("visit_number"), transform, 
+        age_diag.std = scale(age_diag), 
+        time_onset_to_diag.std = scale(time_onset_to_diag),
+        disease_duration_diag.std = scale(disease_duration_diag),
+        age.std = scale(age))
+
+motorBL <- TPD_final_OutomeCovarsPCs %>%
+  dplyr::filter(visit_number == 1) %>% 
+  dplyr::select(FID_IID, ends_with("imputed")) %>% 
+  dplyr::rename(total_BL = UPDRSIIItotal_imputed, limb_BL = UPDRSIIIlimb_imputed, axial_BL = UPDRSIIIaxial_imputed)
+
+TPD_final_OutomeCovarsPCs <- TPD_final_OutomeCovarsPCs %>% inner_join(motorBL)
+
+# Scaling and centering quantitative vars
+TPD_final_OutomeCovarsPCs_LEDDadjusted <- TPD_PCs %>%
+  inner_join(TPD_LEDDadjusted) %>%
+  ddply(., c("visit_number"), transform, 
+        age_diag.std = scale(age_diag), 
+        time_onset_to_diag.std = scale(time_onset_to_diag),
+        disease_duration_diag.std = scale(disease_duration_diag),
+        age.std = scale(age))
+
+TPD_final_OutomeCovarsPCs_LEDDadjusted <- TPD_final_OutomeCovarsPCs_LEDDadjusted %>%
+  inner_join(motorBL)
+
+IDs_complete = TPD_final_OutomeCovarsPCs %>%
+  group_by(FID_IID) %>% 
+  tally() %>% ungroup() %>%
+  filter(n == 3) %>%
+  pull(FID_IID)
+TPD_final_OutomeCovarsPCs_COMPLETE = TPD_final_OutomeCovarsPCs %>%
+  dplyr::filter(FID_IID %in% IDs_complete)
+
+```
+
+
+# Model generation
+
+## Get the null, the basic model ( ie model adjusted by known confounders), and the model with time rslopes
+
+```{r}
+
+# Null model
+randint_total <- lmerTest::lmer(UPDRSIIItotal_imputed ~ 1  
+                 + (1|FID_IID),   
+                 data = TPD_final_OutomeCovarsPCs,
+                 REML = FALSE)     
+randint_limb <- lmerTest::lmer(UPDRSIIIlimb_imputed ~ 1      
+                 + (1|FID_IID),    
+                 data = TPD_final_OutomeCovarsPCs, 
+                 REML = FALSE)   
+randint_axial <- lmerTest::lmer(UPDRSIIIaxial_imputed ~ 1      
+                 + (1|FID_IID),    
+                 data = TPD_final_OutCovarsPCs, 
+                 REML = FALSE)  
+
+
+# Basic model
+modelBasic_total <- lmerTest::lmer(UPDRSIIItotal_imputed ~ 1
+                + (1 |ID) + age_diag.std + gender + 
+                  PC1 + PC2 + PC3 + PC4 + PC5 + PC6 + PC7 + PC8,    
+                data = TPD_final_OutomeCovarsPCs,
+                REML = TRUE)
+modelBasic_limb <- lmerTest::lmer(UPDRSIIIlimb_imputed ~ 1 + 
+                          (1|ID) + age_diag.std + gender + 
+                          PC1 + PC2 + PC3 + PC4 + PC5 + PC6 + PC7 + PC8,    
+                        data = TPD_final_OutomeCovarsPCs,    
+                        REML = TRUE)
+modelBasic_axial <- lmerTest::lmer(UPDRSIIIaxial_imputed ~ 1 +
+                           (1|ID) + age_diag.std + gender + 
+                           PC1 + PC2 + PC3 + PC4 + PC5 + PC6 + PC7 + PC8,    
+                         data = TPD_final_OutomeCovarsPCs,    
+                         REML = TRUE)
+
+
+# Basic models with time rslopes
+rstime_total <- lmerTest::lmer(UPDRSIIItotal_imputed ~ 1
+                + (1 + visit_number | ID) + age_diag.std + gender + 
+                  visit_number + PC1 + PC2 + PC3 + PC4 + PC5,    
+                data = TPD_final_OutomeCovarsPCs,
+                REML = TRUE)
+rstime_limb <- lmerTest::lmer(UPDRSIIIlimb_imputed ~ 1 + 
+                          (1 + visit_number|ID) + age_diag.std + gender + 
+                          visit_number + PC1 + PC2 + PC3 + PC4 + PC5,    
+                        data = TPD_final_OutomeCovarsPCs,    
+                        REML = TRUE)
+rstime_axial <- lmerTest::lmer(UPDRSIIIaxial_imputed ~ 1 +
+                           (1 + visit_number |ID) + age_diag.std + gender + 
+                           visit_number + PC1 + PC2 + PC3 + PC4 + PC5,    
+                         data = TPD_final_OutomeCovarsPCs,    
+                         REML = TRUE)
+
+```
+
+
+
+## Test models with different fixed and random effects
+
+### Fixed effects models
+
+```{r}
+modelBasic_total_LEDDcovar <- lmerTest::lmer(UPDRSIIItotal_imputed ~ 1
+                + (1 |ID) + age_diag.std + gender + Ldopa_bin + LEDD_levo +
+                  PC1 + PC2 + PC3 + PC4 + PC5 + PC6 + PC7 + PC8,    
+                data = TPD_final_OutomeCovarsPCs_LEDDadjusted,
+                REML = TRUE)
+modelBasic_limb_LEDDcovar <- lmerTest::lmer(UPDRSIIIlimb_imputed ~ 1 + 
+                          (1|ID) + age_diag.std + gender + Ldopa_bin + LEDD_levo +
+                          PC1 + PC2 + PC3 + PC4 + PC5 + PC6 + PC7 + PC8,    
+                        data = TPD_final_OutomeCovarsPCs_LEDDadjusted,    
+                        REML = TRUE)
+modelBasic_axial_LEDDcovar <- lmerTest::lmer(UPDRSIIIaxial_imputed ~ 1 +
+                           (1|ID) + age_diag.std + gender + Ldopa_bin + LEDD_levo +
+                           PC1 + PC2 + PC3 + PC4 + PC5 + PC6 + PC7 + PC8,    
+                         data = TPD_final_OutomeCovarsPCs_LEDDadjusted,    
+                         REML = TRUE)
+
+
+modelBasic_total_motorBL <- lmerTest::lmer(UPDRSIIItotal_imputed ~ 1
+                + (1 |ID) + total_BL + +age_diag.std + gender + 
+                  PC1 + PC2 + PC3 + PC4 + PC5 + PC6 + PC7 + PC8,    
+                data = TPD_final_OutomeCovarsPCs,
+                REML = TRUE)
+modelBasic_limb_motorBL <- lmerTest::lmer(UPDRSIIIlimb_imputed ~ 1 + 
+                          (1|ID) + limb_BL + age_diag.std + gender + 
+                          PC1 + PC2 + PC3 + PC4 + PC5 + PC6 + PC7 + PC8,    
+                        data = TPD_final_OutomeCovarsPCs,    
+                        REML = TRUE)
+modelBasic_axial_motorBL <- lmerTest::lmer(UPDRSIIIaxial_imputed ~ 1 +
+                           (1|ID) + axial_BL +age_diag.std + gender + 
+                           PC1 + PC2 + PC3 + PC4 + PC5 + PC6 + PC7 + PC8,    
+                         data = TPD_final_OutomeCovarsPCs,    
+                         REML = TRUE)
+
+# Add disease duration as a fixed efffect term
+modelBasic_total_Disdur <- lmerTest::lmer(UPDRSIIItotal_imputed ~ 1 + 
+                       (1|ID) + 
+                       disease_duration_diag.std + 
+                       age_diag.std + gender + PC1 + PC2 + PC3 + PC4 + PC5 + PC6 + PC7 + PC8, 
+                     data = TPD_final_OutomeCovarsPCs,
+                     REML = FALSE)
+modelBasic_limb_Disdur <- lmerTest::lmer(UPDRSIIIlimb_imputed ~ 1 + 
+                       (1|ID) +
+                       disease_duration_diag.std + 
+                       age_diag.std + gender + PC1 + PC2 + PC3 + PC4 + PC5 + PC6 + PC7 + PC8, 
+                     data = TPD_final_OutomeCovarsPCs,
+                     REML = FALSE)
+modelBasic_axial_Disdur <- lmerTest::lmer(UPDRSIIIlimb_imputed ~ 1 + 
+                       (1|ID) + 
+                       disease_duration_diag.std + 
+                       age_diag.std + gender + PC1 + PC2 + PC3 + PC4 + PC5 + PC6 + PC7 + PC8, 
+                     data = TPD_final_OutomeCovarsPCs,
+                     REML = FALSE)
+
+
+
+
+```
+
+
+
+### RSLOPES models
+
+```{r}
+
+# Models using the outcomes adjusted by LEDD
+rstime_total_LEDD <- lmerTest::lmer(UPDRSIIItotal_LEDDadjusted ~ 1
+               + (1 + visit_number | ID) + age_diag.std + gender + 
+                  visit_number + PC1 + PC2 + PC3 + PC4 + PC5 + PC6 + PC7 + PC8,    
+                data = TPD_final_OutomeCovarsPCs_LEDDadjusted,
+                REML = TRUE)
+rstime_limb_LEDD <- lmerTest::lmer(UPDRSIIIlimb_LEDDadjusted ~ 1
+                + (1 + visit_number | ID) + age_diag.std + gender + 
+                  visit_number + PC1 + PC2 + PC3 + PC4 + PC5 + PC6 + PC7 + PC8,    
+                data = TPD_final_OutomeCovarsPCs_LEDDadjusted,
+                REML = TRUE)
+rstime_axial_LEDD <- lmerTest::lmer(UPDRSIIIaxial_LEDDadjusted ~ 1
+                + (1 + visit_number | ID) + age_diag.std + gender + 
+                  visit_number + PC1 + PC2 + PC3 + PC4 + PC5 + PC6 + PC7 + P8,   
+                data = TPD_final_OutomeCovarsPCs_LEDDadjusted,
+                REML = TRUE)
+
+
+# Models adjusted with the motor score at BL
+rstime_total_motorBL <- lmerTest::lmer(UPDRSIIItotal_imputed ~ 1
+                + (1 + visit_number | ID) + total_BL + age_diag.std + gender + 
+                  visit_number + PC1 + PC2 + PC3 + PC4 + PC5,    
+                data = TPD_final_OutomeCovarsPCs,
+                REML = TRUE)
+rstime_limb_motorBL <- lmerTest::lmer(UPDRSIIIlimb_imputed ~ 1 + 
+                          (1 + visit_number|ID) + limb_BL + age_diag.std + gender + 
+                          visit_number + PC1 + PC2 + PC3 + PC4 + PC5,    
+                        data = TPD_final_OutomeCovarsPCs,    
+                        REML = TRUE)
+rstime_axial_motorBL <- lmerTest::lmer(UPDRSIIIaxial_imputed ~ 1 +
+                           (1 + visit_number |ID) + axial_BL + age_diag.std + gender + 
+                           visit_number + PC1 + PC2 + PC3 + PC4 + PC5,    
+                         data = TPD_final_OutomeCovarsPCs,    
+                         REML = TRUE)
+
+
+# Adding centre as a covariate
+rstime_total_motorBL_centr <- lmerTest::lmer(UPDRSIIItotal_imputed ~ 1
+                + (1 + visit_number|ID) + Centre + age_diag.std + gender + 
+                  PC1 + PC2 + PC3 + PC4 + PC5 + PC6 + PC7 + PC8,    
+                data = TPD_final_OutomeCovarsPCs,
+                REML = FALSE)
+
+
+rstime_limb_motorBL_centre <- lmerTest::lmer(UPDRSIIIlimb_imputed ~ 1
+                + (1 + visit_number|ID) + Centre + age_diag.std + gender + 
+                  PC1 + PC2 + PC3 + PC4 + PC5 + PC6 + PC7 + PC8,    
+                data = TPD_final_OutomeCovarsPCs,
+                REML = FALSE)
+
+
+rstime_axial_motorBL_centre <- lmerTest::lmer(UPDRSIIIaxial_imputed ~ 1
+                + (1 + visit_number|ID) + Centre + age_diag.std + gender + 
+                  PC1 + PC2 + PC3 + PC4 + PC5 + PC6 + PC7 + PC8,    
+                data = TPD_final_OutomeCovarsPCs,
+                REML = FALSE)
+                 
+
+
+# Adding LEDD as a covariate
+rstime_total_motorBL_LEDDcovar <- lmerTest::lmer(UPDRSIIItotal_imputed ~ 1
+                + (1 + visit_number | ID) + total_BL + age_diag.std + gender + 
+                   Ldopa_bin + LEDD_levo + 
+                  visit_number + PC1 + PC2 + PC3 + PC4 + PC5,    
+                data = TPD_final_OutomeCovarsPCs_LEDDadjusted,
+                REML = TRUE)
+rstime_limb_motorBL_LEDDcovar <- lmerTest::lmer(UPDRSIIIlimb_imputed ~ 1 + 
+                          (1 + visit_number|ID) + limb_BL + age_diag.std + gender +
+                            Ldopa_bin + LEDD_levo + 
+                          visit_number + PC1 + PC2 + PC3 + PC4 + PC5,    
+                        data = TPD_final_OutomeCovarsPCs_LEDDadjusted,    
+                        REML = TRUE)
+rstime_axial_motorBL_LEDDcovar <- lmerTest::lmer(UPDRSIIIaxial_imputed ~ 1 +
+                           (1 + visit_number |ID) + axial_BL + age_diag.std + gender +
+                             Ldopa_bin + LEDD_levo + 
+                           visit_number + PC1 + PC2 + PC3 + PC4 + PC5,    
+                         data = TPD_final_OutomeCovarsPCs_LEDDadjusted,    
+                         REML = TRUE)
+
+# RANDOM SLOPE GENDER TIME INTERACTION #
+rstime_gendertime_total <- lmerTest::lmer(UPDRSIIItotal_imputed ~ 1
+                + (1 + visit_number | ID) + age_diag.std + gender + 
+                  visit_number + gender*visit_number + PC1 + PC2 + PC3 + PC4 + PC5 + PC6 + PC7 + PC8,    
+                data = TPD_final_OutomeCovarsPCs,
+                REML = TRUE)
+rstime_gendertime_limb <- lmerTest::lmer(UPDRSIIIlimb_imputed ~ 1 + 
+                          (1 + visit_number|ID) + age_diag.std + gender + 
+                          visit_number + gender*visit_number + PC1 + PC2 + PC3 + PC4 + PC5,    
+                        data = TPD_final_OutomeCovarsPCs,    
+                        REML = TRUE)
+rstime_gendertime_axial <- lmerTest::lmer(UPDRSIIIaxial_imputed ~ 1 +
+                           (1 + visit_number |ID) + age_diag.std + gender + 
+                           visit_number + gender*visit_number + PC1 + PC2 + PC3 + PC4 + PC5,    
+                         data = TPD_final_OutomeCovarsPCs,    
+                         REML = TRUE)
+
+
+
+# Add disease duration as a rslope term
+modelDisdur_total_v1 <- lmerTest::lmer(UPDRSIIItotal_imputed ~ 1 + # We indicate we only want one intercept 
+                       (1 + disease_duration_diag.std|ID) + # Using ID as our grouping variable and adding random effects on the intercept and the slope for disease duration
+                       disease_duration_diag.std + 
+                       age_diag.std + gender + PC1 + PC2 + PC3 + PC4 + PC5 + PC6 + PC7 + PC8, 
+                     data = TPD_final_OutomeCovarsPCs,
+                     REML = FALSE)
+
+
+
+modelDisdur_limb_v1 <- lmerTest::lmer(UPDRSIIIlimb_imputed ~ 1 + # We indicate we only want one intercept 
+                       (1 + disease_duration_diag.std|ID) + # Using ID as our grouping variable and adding random effects on the intercept and the slope for disease duration
+                       disease_duration_diag.std + 
+                       age_diag.std + gender + PC1 + PC2 + PC3 + PC4 + PC5 + PC6 + PC7 + PC8, 
+                     data = TPD_final_OutomeCovarsPCs,
+                     REML = FALSE)
+modelDisdur_axial_v1 <- lmerTest::lmer(UPDRSIIIlimb_imputed ~ 1 + # We indicate we only want one intercept 
+                       (1 + disease_duration_diag.std|ID) + # Using ID as our grouping variable and adding random effects on the intercept and the slope for disease duration
+                       disease_duration_diag.std + 
+                       age_diag.std + gender + PC1 + PC2 + PC3 + PC4 + PC5 + PC6 + PC7 + PC8, 
+                     data = TPD_final_OutomeCovarsPCs,
+                     REML = FALSE)
+
+
+
+
+# Using motor subtype as the grouping var instead of ID
+groupMotorSub_total <- lmerTest::lmer(UPDRSIIItotal_imputed ~ 1
+                + (1|subtype_cat) + age_diag.std + gender + 
+                  PC1 + PC2 + PC3 + PC4 + PC5 + PC6 + PC7 + PC8,    
+                data = TPD_final_OutomeCovarsPCs,
+                REML = FALSE)
+groupMotorSub_limb <- lmerTest::lmer(UPDRSIIIlimb_imputed ~ 1 + 
+                          (1|subtype_cat) + age_diag.std + gender + 
+                          PC1 + PC2 + PC3 + PC4 + PC5 + PC6 + PC7 + PC8,    
+                        data = TPD_final_OutomeCovarsPCs,    
+                        REML = FALSE)
+groupMotorSub_axial <- lmerTest::lmer(UPDRSIIIaxial_imputed ~ 1 +
+                           (1|subtype_cat) + age_diag.std + gender + 
+                           PC1 + PC2 + PC3 + PC4 + PC5 + PC6 + PC7 + PC8,    
+                         data = TPD_final_OutomeCovarsPCs,    
+                         REML = FALSE)
+
+
+```
+
+
+## Get all metrics in a matrix
+
+```{r}
+# Get a function to get all model metrics in a data frame
+model_metrics <- function(x, model) {
+  coeffs = coef(summary(x))
+  model = model
+  if (grepl("rand", model) == "FALSE") {
+    r2 = MuMIn::r.squaredGLMM(x)
+    mydf = data.frame(Coeff_name = c(rownames(coeffs)[2],
+                                     rownames(coeffs)[3]),
+                      Coeff = c(coeffs[2,1], coeffs[3,1]),
+                      se = c(coeffs[2,2], coeffs[3,2]),
+                      tVal = c(coeffs[2,4], coeffs[3,4]),
+                      pVal = c(coeffs[2,5], coeffs[3,5]),
+                      BIC_model = rep(BIC(x),2),
+                      MargR2_model = rep(r2[1], 2),
+                      CondR2_model = rep(r2[2],2),
+                      OutcomeVar = rep(model, 2))
+  } else {
+      r2 = MuMIn::r.squaredGLMM(x)
+      mydf = data.frame(Coeff_name = rownames(coeffs)[1],
+                        Coeff = coeffs[1,1],
+                        se = coeffs[1,2],
+                        tVal = coeffs[1,4],
+                        pVal = coeffs[1,5],
+                        BIC_model = BIC(x),
+                        MargR2_model = r2[1],
+                        CondR2_model = r2[2],
+                        OutcomeVar = model)
+    
+  }
+  mydf
+}
+
+
+metrix <-as.data.frame(matrix(ncol= 9))
+names(metrix) <- c("Coeff_name","Coeff", "se", "tVal", "pVal", "BIC_model", "MargR2_model", "CondR2_model", "OutcomeVar")
+
+
+data_list = list()
+# vector with all the models to iterate
+model_names <- c("randint_total","randint_limb","randint_axial",
+                 "modelBasic_total", "modelBasic_limb", "modelBasic_axial",
+                 "modelBasic_total_LEDDcovar", "modelBasic_limb_LEDDcovar", "modelBasic_axial_LEDDcovar",
+                 "modelBasic_total_motorBL", "modelBasic_limb_motorBL", "modelBasic_axial_motorBL",
+                 "modelBasic_axial_Disdur", "modelBasic_axial_Disdur", "modelBasic_axial_Disdur",
+                 "rstime_total","rstime_limb","rstime_axial",
+                 "rstime_total_LEDD","rstime_limb_LEDD","rstime_axial_LEDD",
+                 "groupMotorSub_total", "groupMotorSub_limb", "groupMotorSub_axial",
+                 "rstime_total_5PCs","rstime_limb_5PCs","rstime_axial_5PCs",
+                 "rstime_total_motorBL", "rstime_limb_motorBL", "rstime_axial_motorBL",
+                 "rstime_total_motorBL_LEDDcovar", "rstime_limb_motorBL_LEDDcovar", "rstime_axial_motorBL_LEDDcovar",
+                 "rstime_gendertime_total","rstime_gendertime_limb","rstime_gendertime_axial"
+                 )
+
+for(i in 1:length(model_names)) {
+  model_var = get(model_names[i])
+  metrics = model_metrics(x = model_var, model = model_names[i])
+  data_list[[i]] = metrics
+}
+
+results <- dplyr::bind_rows(data_list)
+
+results %>%
+  kbl() %>%
+  kable_paper("hover", full_width = F)
+```
+
+
+
+
+# Check the effect of disease duration and the total outcome
+
+To do so, we are adding an interaction term that allows to quantify this effect in the outcome
+
+```{r}
+
+modelBasic_36m_total_disdur <- lmerTest::lmer(UPDRSIIItotal_imputed ~ 1
+                + (1 |ID) + age_diag.std + gender + visit_number +  dis_dur_onset_BL +
+                  visit_number*dis_dur_onset_BL + 
+                  PC1 + PC2 + PC3 + PC4 + PC5,    
+                data = TPD_final_OutomeCovarsPCs,
+                REML = TRUE)
+
+modelBasic_36m_total_disdur <- lmerTest::lmer(UPDRSIIItotal_imputed ~ 1
+                + (1 |ID) + age_diag.std + gender + visit_number +  disease_duration_diag +
+                  visit_number*disease_duration_diag + 
+                  PC1 + PC2 + PC3 + PC4 + PC5,    
+                data = TPD_final_OutomeCovarsPCs,
+                REML = TRUE)
+
+
+TPD_final_OutomeCovarsPCs <- TPD_PCs %>%
+  inner_join(TPD_final) %>%
+  ddply(., c("visit_number"), transform, 
+        age_diag.std = scale(age_diag), 
+        time_onset_to_diag.std = scale(time_onset_to_diag),
+        disease_duration_diag.std = scale(disease_duration_diag),
+        age.std = scale(age))
+
+modelBasic_total_disdur <- lmerTest::lmer(UPDRSIIItotal_imputed ~ 1
+                + (1 |ID) + age_diag.std + gender + visit_number +  dis_dur_onset_BL +
+                  visit_number*dis_dur_onset_BL + 
+                  PC1 + PC2 + PC3 + PC4 + PC5,    
+                data = TPD_finalAll_OutomeCovarsPCs,
+                REML = TRUE)
+
+
+```
+
+
+
+
+# Proving PD-STAT has a lower annualised rate of change because of its higher disease duration
+
+```{r}
+pdstat_clinical = readRDS("../Data_processed/Rfiles_modelFitting.automationOutline/PDSTAT/PDSTAT_final.RDS")
+pdstat_pca <- read.table("~/Kronos_downloads/PCA.eigenvec", quote="\"", comment.char="")[2:10]
+colnames(pdstat_pca) = c("FID_IID","PC1","PC2","PC3","PC4","PC5", "PC6", "PC7", "PC8")
+
+pdstat = pdstat_clinical %>% inner_join(pdstat_pca)
+
+pdstat_diseaseduration <- lmerTest::lmer(UPDRSIIItotal_imputed ~ 1
+                + (1 |ID) + age_onset.std + Gender + visit_number +  dis_dur_OnsetBL +
+                  visit_number*dis_dur_OnsetBL +
+                  PC1 + PC2 + PC3 + PC4 + PC5 + PC6 + PC7 + PC8,    
+                data = pdstat,
+                REML = TRUE)
+
+
+```

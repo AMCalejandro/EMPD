@@ -1,0 +1,155 @@
+---
+title: "9. ForestPlots"
+author: "AMCalejandro"
+date: "31/3/2022"
+output: html_document
+---
+
+
+```{r}
+library(forestplot)
+library(dplyr)
+library(tidyverse)
+
+# To load in memory the function to get the forestplots
+source("utils/utils.R")
+```
+
+
+# rs36082764
+
+```{r}
+
+SNP_cohort = tibble(
+  mean = c(-0.66, -0.66, -0.26, -0.65),
+  lower= c(-0.66 - (1.96*0.17), -0.66 - (1.96*0.19),
+           -0.26 - (1.96*0.35), -0.65 - (1.96*0.28)),
+  upper= c(-0.66 + (1.96*0.17), -0.66 + (1.96*0.19),
+           -0.26 + (1.96*0.35), -0.65 + (1.96*0.28)),
+  study = c("TPD", "PPMI","DIGPD", "PDBP"),
+  effect = c("-0.66", "-0.66", "-0.26", "-0.65"),
+  ci = c("[-0.99, -0.92]", "[-1.03, -0.29]", "[-0.95, 0.26]", "[-1.20, -0.10]")
+  )
+
+summary = tibble(mean = -0.6178,
+                 lower = -0.62 - (1.96*0.11),
+                 upper = -0.62 + (1.96*0.11),
+                 study = "Summary",
+                 effect = "-0.62",
+                 ci =  "[-0.84 ,-0.40]",
+                 summary = TRUE)
+
+header = tibble(study = "Study",
+                effect = "β",
+                ci = "CI",
+                summary = TRUE)
+
+empty_row <- tibble(mean = NA_real_)
+
+SNPdf <- bind_rows(header,
+                   SNP_cohort,
+                   empty_row,
+                   summary)
+
+a = myforestplot(df = SNPdf, 
+                 snpname = "rs36082764", 
+                  n_studies = 4)
+pdf("FIGURES/rs36082764_forestPlot.pdf", width = 9)
+a
+dev.off()
+
+```
+
+
+# rs4721411
+
+
+```{r}
+
+SNP_cohort = tibble(
+  mean = c(0.62, 0.43, 0.65, -0.40, 0.42, 0.70),
+  lower= c(0.62 - (1.96*0.17), 0.43 - (1.96*0.19), 0.65 - (1.96*0.24),
+           -0.40 - (1.96*0.50), 0.42 - (1.96*0.35), 0.70 - (1.96*0.28)),
+  upper= c(0.62 + (1.96*0.17), 0.43 + (1.96*0.19), 0.65 + (1.96*0.24),
+             -0.40 + (1.96*0.50),  0.42 + (1.96*0.35), 0.70 + (1.96*0.28)),
+  study = c("TPD", "PPMI", "OPDC", "PDSTAT", "DIGPD", "PDBP"),
+  effect = c("0.62", "0.43", "0.65", "-0.40", "0.42", "0.70"),
+  ci = c("[0.29, 0.95]", "[0.18, 0.80]", "[0.18, 1.12]", "[-1.38, 0.58]", "[-0.27, 1.11]", "[0.14, 1.25]")
+  )
+
+summary = tibble(mean = 0.53,
+                 lower =  0.53 - (1.96*0.10),
+                 upper = 0.53 + (1.96*0.10),
+                 study = "Summary",
+                 effect = "0.53",
+                 ci =  "[0.33, 0.73]",
+                 summary = TRUE)
+
+header = tibble(study = "Study",
+                effect = "β",
+                ci = "CI",
+                summary = TRUE)
+
+empty_row <- tibble(mean = NA_real_)
+
+SNPdf <- bind_rows(header,
+                   SNP_cohort,
+                   empty_row,
+                   summary)
+
+a = myforestplot(df = SNPdf, 
+                 snpname = "rs4721411", 
+                  n_studies = 4)
+pdf("FIGURES/rs4721411_forestPlot.pdf", width = 9)
+a
+dev.off()
+
+```
+
+
+# rs12037169
+
+```{r}
+SNP_cohort = tibble(
+  mean = c(-0.30, -0.32, -0.11, -0.34, -0.3, 0.02),
+  lower= c(-0.30 - (1.96*0.06), -0.32 - (1.96*0.08),
+           -0.11 - (1.96*0.11), -0.34 - (1.96*0.1),
+           -0.3 - (1.96*0.70), 0.02 - (1.96*0.11)),
+  upper= c(-0.30 + (1.96*0.06), -0.32 + (1.96*0.08),
+           -0.11 + (1.96*0.11), -0.34 + (1.96*0.1),
+           -0.3 + (1.96*0.70), 0.02 + (1.96*0.11)),
+  study = c("TPD", "OPDC", "PPMI","DIGPD","PDSTAT", "PDBP"),
+  effect = c("-0.30", "-0.32", "-0.11", "-0.34", "-0.3", "0.02"),
+  ci = c("[-0.42, -0.18]", "[-0.48, -0.16]", "[-0.33, 0.11]", "[-0.53, -0.15]",
+         "[-1.6, 1.07]", "[-0.2, -0.23]")
+  )
+
+summary = tibble(mean = -0.25,
+                 lower =  -0.25 - (1.96*0.04),
+                 upper = -0.25 + (1.96*0.04),
+                 study = "Summary",
+                 effect = "-0.25",
+                 ci =  "[-0.33 ,-0.17]",
+                 summary = TRUE)
+
+header = tibble(study = "Study",
+                effect = "β",
+                ci = "CI",
+                summary = TRUE)
+
+empty_row <- tibble(mean = NA_real_)
+
+SNPdf <- bind_rows(header,
+                   SNP_cohort,
+                   empty_row,
+                   summary)
+
+
+a = myforestplot(df = SNPdf, 
+                 snpname = "rs12037169", 
+                  n_studies = 4)
+pdf("FIGURES/rs12037169_forestPlot.pdf", width = 9)
+a
+dev.off()
+```
+

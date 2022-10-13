@@ -1,0 +1,429 @@
+---
+title: 'Sensitivity analysis'
+author: 
+- name: "Alejandro M.Carrasco"
+  affiliation: UCL
+output: 
+  html_document:
+    css: ./font/missingexploration_fontsize.css
+    code_folding: hide
+    theme: paper
+    highlight: kate
+    df_print: paged
+    fontsize: 20pt
+    toc: true
+    toc_float: true
+    number_sections: true
+--- 
+
+
+```{r setup, include=FALSE}
+library(tidyverse)      # For tidy manipulation of data
+library(here)           # For file path construction
+library(DT)             # To display data tables
+library(readxl)         # To read excel files
+library(stringr)        # To do string operations
+library(kableExtra)     # To display fancy tables
+library(psych)          # For data description
+library(plyr)
+
+source(here::here("R", "utils", "utils.R"))
+
+theme_rhr <-  theme_bw(base_family = "Helvetica") +
+  theme(panel.grid.major.x = element_blank(),
+        legend.position = "right",
+        strip.text = element_text(size = 8),
+        strip.text.y = element_text(angle = 90),
+        axis.text.x = element_text(size = 8, angle = 90, hjust = 1, vjust = 0.5),
+        axis.text.y = element_text(size = 8),
+        axis.title.y = element_text(vjust = 0.6),
+        axis.title = element_text(size = 10),
+        panel.spacing = unit(0.1, "lines"))
+knitr::opts_chunk$set(echo = T, warning = F, message= F)
+
+```
+
+> Aim: To get the data needed to perform our sensitivity analyses
+
+
+# Data loading
+```{r}
+# Loading Ldopa challenge data
+ldopa_challenge <- readxl::read_xls("/home/alejandromc/Data/WorkingDirectory/PROBAND/clinical_data/ldopa_Challenge/Ldopa_Challenge.xls")
+
+
+## ProBanD
+# Loading file to extract HY stage at BL
+P3_TPD <- as_tibble(read.csv("~/Data/WorkingDirectory/PROBAND/clinical_data/P3_TPD_Version2_temp_06_16_2020.csv"))
+P3_TPD_HY <- P3_TPD %>% select(ID, V1_hoehn_and_yahr_stage)
+
+### Reshape the data from wide to long format
+P3_TPD_HY_long <- reshape(as.data.frame(P3_TPD %>% select(ID, V1_hoehn_and_yahr_stage, V4_hoehn_and_yahr_stage, V7_hoehn_and_yahr_stage)),
+                           idvar = "ID", 
+                           direction = "long",
+                           varying = c("V1_hoehn_and_yahr_stage", "V4_hoehn_and_yahr_stage", "V7_hoehn_and_yahr_stage"),
+                           timevar = "visit_number", times = c(1, 4, 7),
+                           v.names = "HY")
+# Loading file with LEDD data
+TPD_LEDD <- read.csv("~/Data/WorkingDirectory/PROBAND/clinical_data/Tracking_Ldopa_data_with_doses_2021_03.csv")
+# Loading the final dataset
+TPD_final <- as_tibble(readRDS("../Data_processed/Rfiles_modelFitting.automationOutline/PROBAND/TPD_final.rds"))
+
+## OPDC
+# Loading the raw data to get HY information
+OPDC <- as_tibble(read.csv("~/Data/WorkingDirectory/OPDC/clinical_data/Discovery_FU_data_with_onset_2021_04.csv", header = T, na.strings = c("","NA")))
+OPDC_HY <- OPDC %>% select(subjid, visit, af_hoehn_stage) %>%
+  mutate(subjid = str_replace_all(subjid, c("PDS/" = "", "/" = ""))) %>%
+  dplyr::rename(ID = subjid) %>%
+  mutate(ID = paste(ID, ID, sep = "_"))
+# Loading LEDD info
+OPDC_LEDD <- read.csv("~/Data/WorkingDirectory/OPDC/clinical_data/Discovery_LEDD_data_visit_1_to_3_2021_04.csv") %>%
+  mutate(subjid = str_replace_all(subjid, c("PDS/" = "", "/" = ""))) %>%
+  dplyr::rename(ID = subjid) %>%
+  mutate(ID = paste(ID, ID, sep = "_"))
+
+# Getting the QC data
+OPDC_final <- as_tibble(readRDS("../Data_processed/Rfiles_modelFitting.automationOutline/OPDC/OPDC_final.rds"))
+
+
+## DIGD
+# Loading the full DIGPD data
+DIGPD_ALL = readxl::read_xlsx("~/Data/WorkingDirectory/DIGPD_DATA/dig_pd_2019_11_Alejandro.xlsx")
+DIGPD_ALL = DIGPD_ALL %>% select(PATIENT, visite, HOEHNandYAHR, starts_with("levo")) %>% 
+  dplyr::rename(visit_number = visite, ID = PATIENT) %>%
+  mutate(visit_number = visit_number - 1)
+# Loading the 
+DIGPD = readRDS("../Data_processed/Rfiles_modelFitting.automationOutline/DIGPD/DIGPD_final.rds")
+
+## PPMI
+PPMI <- read.csv("/home/alejandromc/Data/WorkingDirectory/PPMI/clinical_data/PPMI_Original_Cohort_BL_to_Year_5_Dataset_Apr2020.csv") %>% 
+  select(PATNO, EVENT_ID, NHY, NHY_ON, LEDD, PD_MED_USE) %>%
+  mutate(PATNO = paste0("PPMI", PATNO))
+
+PPMI_final = as_tibble(readRDS("../Data_processed/Rfiles_modelFitting.automationOutline/PPMI/PPMI_final.rds"))
+
+# Joining the ldopa challenge data with the HY information
+ldopa_challenge = ldopa_challenge %>% inner_join(P3_TPD_HY)
+
+
+PDBP <- readRDS("/home/amcalejandro/Data/WorkingDirectory/PDBP/earlyPD_data/PDBP_final.rds")
+PDBP_LEDD <- read.csv("/home/amcalejandro/Data/WorkingDirectory/PDBP/earlyPD_data/PDBP_derived_ledd.csv.csv") %>% 
+  mutate(SGUID = paste0("PD-", gsub(".*\\.", "", SGUID)))
+
+
+```
+
+
+# Getting the weights for the axial and limbs symptoms from the Ldop challenge data
+
+We split the data into two ( pre and post dose scores)
+```{r}
+ldopa_challenge_preDose_long = ldopa_challenge %>%
+  mutate(visit_number = 1L) %>%
+  select(ID, visit_number, baseline_UPDRS_III, Pd_UPDRS_III, perc_change, Ldopa_resp_bin, V1_hoehn_and_yahr_stage, starts_with("score_a")) %>%
+  gather(UPDRSIII_measure, score, starts_with("score")) 
+  
+ldopa_challenge_postDose_long = ldopa_challenge %>%
+  mutate(visit_number = 1) %>%
+  select(ID, visit_number, baseline_UPDRS_III, Pd_UPDRS_III, perc_change, Ldopa_resp_bin, V1_hoehn_and_yahr_stage, starts_with("score_Pd")) %>%
+  gather(UPDRSIII_measure, score, starts_with("score"))
+
+```
+
+
+
+```{r}
+ldopa_challenge_preDose_long_motorSymps = impute_UPDRSIII_v4(df = ldopa_challenge_preDose_long, 
+                                                             UPDRS_type = c("limb", "axial"), 
+                                                             keep_vars = "Yes") %>%
+  dplyr::rename(UPDRSIIIlimb_imputed_pre = UPDRSIIIlimb_imputed, UPDRSIIIaxial_imputed_pre = UPDRSIIIaxial_imputed)
+
+ldopa_challenge_postDose_long_motorSymps = impute_UPDRSIII_v4(df = ldopa_challenge_postDose_long, 
+                                                             UPDRS_type = c("limb", "axial"), 
+                                                             keep_vars = "Yes") %>%
+  dplyr::rename(UPDRSIIIlimb_imputed_post = UPDRSIIIlimb_imputed, UPDRSIIIaxial_imputed_post = UPDRSIIIaxial_imputed)
+
+
+ldopa_challenge_final = ldopa_challenge_preDose_long_motorSymps %>% 
+  inner_join(ldopa_challenge_postDose_long_motorSymps) %>%
+  relocate(UPDRSIIIlimb_imputed_post, .after = UPDRSIIIlimb_imputed_pre) %>%
+  relocate(UPDRSIIIaxial_imputed_post, .after = UPDRSIIIaxial_imputed_pre)
+```
+
+Now we are ready to get the limb and axial weights
+
+```{r}
+# Getting the MDS UPDRS III total change ( pre and post dose)
+motorChanges = ldopa_challenge_final %>%
+  mutate(HY_ST = case_when(V1_hoehn_and_yahr_stage <= 3 ~ "Low",
+                           V1_hoehn_and_yahr_stage >= 4 ~ "High",
+                           TRUE ~ as.character(NA))) %>%
+  filter(!is.na(HY_ST)) %>% 
+  group_by(HY_ST) %>%
+  dplyr::summarise(total_change = mean(baseline_UPDRS_III - Pd_UPDRS_III),
+            limb_change = mean(UPDRSIIIlimb_imputed_pre - UPDRSIIIlimb_imputed_post),
+            axial_change = mean(UPDRSIIIaxial_imputed_pre - UPDRSIIIaxial_imputed_post),
+            count = n())
+motorChanges
+```
+
+# Adjusting motor scores by LEDD - PROBAND
+
+```{r}
+# We now have to group the data based on ID, and visit. 
+# Then, for each LEDD at each visit, we correct the motory symptom measure
+
+
+# We need to join the imputed motor scores, and the LEDD data
+TPD_final_LEDD = TPD_final %>%
+  inner_join(P3_TPD_HY) %>%
+  inner_join(TPD_LEDD %>% select(-c(age, disease_duration_diag)), by = c("ID", "visit_number" = "Visit"))
+
+
+TPD_final_LEDD <- TPD_final_LEDD %>% 
+  mutate(UPDRSIIItotal_LEDDadjusted = case_when((Ldopa_bin == "Yes" & V1_hoehn_and_yahr_stage <= 3) ~ UPDRSIIItotal_imputed +  0.3620217*sqrt(LEDD_levo),
+                                                (Ldopa_bin == "Yes" & V1_hoehn_and_yahr_stage >= 4) ~ UPDRSIIItotal_imputed + 0.3318533*sqrt(LEDD_levo),
+                                                Ldopa_bin == "No" ~ UPDRSIIItotal_imputed,
+                                                Ldopa_bin == "" ~ NaN),
+         UPDRSIIIlimb_LEDDadjusted = case_when((Ldopa_bin == "Yes" & V1_hoehn_and_yahr_stage <= 3) ~ UPDRSIIIlimb_imputed +
+                                                 0.7768536*(0.3620217*sqrt(LEDD_levo)),
+                                                (Ldopa_bin == "Yes" & V1_hoehn_and_yahr_stage >= 4) ~ UPDRSIIIlimb_imputed +
+                                                 0.7768536*(0.3318533*sqrt(LEDD_levo)),
+                                                Ldopa_bin == "No" ~ UPDRSIIIlimb_imputed,
+                                                Ldopa_bin == "" ~ NaN),
+          UPDRSIIIaxial_LEDDadjusted = case_when((Ldopa_bin == "Yes" & V1_hoehn_and_yahr_stage <= 3) ~ UPDRSIIIaxial_imputed +
+                                                   0.2231463*(0.3620217*sqrt(LEDD_levo)),
+                                                (Ldopa_bin == "Yes" & V1_hoehn_and_yahr_stage >= 4) ~ UPDRSIIIaxial_imputed +
+                                                  0.2231463*(0.3318533*sqrt(LEDD_levo)),
+                                                Ldopa_bin == "No" ~ UPDRSIIIaxial_imputed,
+                                                Ldopa_bin == "" ~ NaN))
+
+
+
+# We need to join the imputed motor scores, and the LEDD data
+TPD_final_LEDD = TPD_final %>%
+  inner_join(P3_TPD_HY_long) %>%
+  inner_join(TPD_LEDD %>% select(-c(age, disease_duration_diag)), by = c("ID", "visit_number" = "Visit"))
+  
+
+TPD_final_LEDD <- TPD_final_LEDD %>% 
+  mutate(UPDRSIIItotal_LEDDadjusted = case_when((Ldopa_bin == "Yes" & HY <= 3) ~ UPDRSIIItotal_imputed +  0.3620217*sqrt(LEDD_levo),
+                                                (Ldopa_bin == "Yes" & HY >=4) ~ UPDRSIIItotal_imputed + 0.3318533*sqrt(LEDD_levo),
+                                                Ldopa_bin == "No" ~ UPDRSIIItotal_imputed,
+                                                Ldopa_bin == "" ~ NaN),
+         UPDRSIIIlimb_LEDDadjusted = case_when((Ldopa_bin == "Yes" & HY <= 3) ~ UPDRSIIIlimb_imputed +  0.7768536*(0.3620217*sqrt(LEDD_levo)),
+                                                (Ldopa_bin == "Yes" & HY >=4) ~ UPDRSIIIlimb_imputed + 0.7768536*(0.3318533*sqrt(LEDD_levo)),
+                                                Ldopa_bin == "No" ~ UPDRSIIIlimb_imputed,
+                                                Ldopa_bin == "" ~ NaN),
+          UPDRSIIIaxial_LEDDadjusted = case_when((Ldopa_bin == "Yes" & HY <= 3) ~ UPDRSIIIaxial_imputed +  0.2231463*(0.3620217*sqrt(LEDD_levo)),
+                                                (Ldopa_bin == "Yes" & HY >=4) ~ UPDRSIIIaxial_imputed + 0.2231463*(0.3318533*sqrt(LEDD_levo)),
+                                                Ldopa_bin == "No" ~ UPDRSIIIaxial_imputed,
+                                                Ldopa_bin == "" ~ NaN))
+
+
+
+
+# Some Nas came up as we were missing th LEDD info for those data points - We exclude them
+TPD_final_LEDD = TPD_final_LEDD %>% filter(!is.na(UPDRSIIItotal_LEDDadjusted))
+
+#Save as RDS files
+saveRDS(TPD_final_LEDD, "../Data_processed/ledd_adjusted/TPD_LEDDadjusted_final.rds")
+```
+
+
+
+# Adjusting motor scores by LEDD - DIGPD
+
+```{r}
+DIGPD_final_LEDD = DIGPD %>% left_join(DIGPD_ALL, by = c("ID", "visit_number"))
+
+
+motorChanges = DIGPD_final_LEDD %>%
+  mutate(HY_ST = case_when(HOEHNandYAHR <= 3 ~ "Low",
+                           HOEHNandYAHR >= 4 ~ "High",
+                           TRUE ~ as.character(NA))) %>%
+  filter(!is.na(HY_ST)) %>% 
+  group_by(visit_number, HY_ST) %>%
+  dplyr::summarise(count = n())
+
+motorChanges
+
+
+
+
+DIGPD_final_LEDD <- DIGPD_final_LEDD %>%
+  mutate(UPDRSIIItotal_LEDDadjusted = case_when((levodopa == 1 & HOEHNandYAHR <= 3) ~ UPDRSIIItotal_imputed +  0.3620217*sqrt(levo_dose_LED),
+                                                (levodopa == 1 & HOEHNandYAHR  >=4) ~ UPDRSIIItotal_imputed + 0.3318533*sqrt(levo_dose_LED),
+                                                levodopa == 0 ~ UPDRSIIItotal_imputed,
+                                                TRUE ~ NaN),
+         UPDRSIIIlimb_LEDDadjusted = case_when((levodopa == 1 & HOEHNandYAHR <= 3) ~ UPDRSIIIlimb_imputed +  0.7768536*(0.3620217*sqrt(levo_dose_LED)),
+                                                (levodopa == 1 & HOEHNandYAHR >=4) ~ UPDRSIIIlimb_imputed + 0.7768536*(0.3318533*sqrt(levo_dose_LED)),
+                                                levodopa == 0 ~ UPDRSIIIlimb_imputed,
+                                                TRUE ~ NaN),
+          UPDRSIIIaxial_LEDDadjusted = case_when((levodopa == 1 & HOEHNandYAHR <= 3) ~ UPDRSIIIaxial_imputed +  0.2231463*(0.3620217*sqrt(levo_dose_LED)),
+                                                (levodopa == 1 & HOEHNandYAHR >=4) ~ UPDRSIIIaxial_imputed + 0.2231463*(0.3318533*sqrt(levo_dose_LED)),
+                                                levodopa == 0 ~ UPDRSIIIaxial_imputed,
+                                                TRUE ~ NaN))
+
+# Remove the 
+DIGPD_final_LEDD <- DIGPD_final_LEDD %>% 
+  filter(!is.na(UPDRSIIItotal_LEDDadjusted))
+
+saveRDS(DIGPD_final_LEDD, "../Data_processed/ledd_adjusted/DIGPD_LEDDadjusted_final.rds")
+```
+
+
+
+# Adjusting motor scores by LEDD - OPDC
+
+```{r}
+OPDC_final_LEDD = OPDC_final %>% 
+  left_join(OPDC_HY, by = c("ID", "visit")) %>%
+  left_join(OPDC_LEDD, by = c("ID", "visit")) 
+
+
+
+
+motorChanges = OPDC_final_LEDD %>%
+  mutate(HY_ST = case_when(af_hoehn_stage <= 3 ~ "Low",
+                           af_hoehn_stage >= 4 ~ "High",
+                           TRUE ~ as.character(NA))) %>%
+  filter(!is.na(HY_ST)) %>%
+  group_by(visit, HY_ST) %>%
+  dplyr::summarise(count = n())
+
+
+OPDC_final_LEDD <- OPDC_final_LEDD %>%
+  mutate(UPDRSIIItotal_LEDDadjusted = case_when((!is.na(LEDD_total) & af_hoehn_stage <= 3) ~ UPDRSIIItotal_imputed + 0.3620217*sqrt(LEDD_total),
+                                                (!is.na(LEDD_total) & af_hoehn_stage  >=4) ~ UPDRSIIItotal_imputed + 0.3318533*sqrt(LEDD_total),
+                                                is.na(LEDD_total) ~ UPDRSIIItotal_imputed,
+                                                TRUE ~ NaN),
+         UPDRSIIIlimb_LEDDadjusted = case_when((!is.na(LEDD_total) & af_hoehn_stage <= 3) ~ UPDRSIIIlimb_imputed +  0.7768536*(0.3620217*sqrt(LEDD_total)),
+                                                (!is.na(LEDD_total) & af_hoehn_stage >=4) ~ UPDRSIIIlimb_imputed + 0.7768536*(0.3318533*sqrt(LEDD_total)),
+                                                is.na(LEDD_total) ~ UPDRSIIIlimb_imputed,
+                                                TRUE ~ NaN),
+          UPDRSIIIaxial_LEDDadjusted = case_when((!is.na(LEDD_total) & af_hoehn_stage <= 3) ~ UPDRSIIIaxial_imputed +  0.2231463*(0.3620217*sqrt(LEDD_total)),
+                                                (!is.na(LEDD_total) & af_hoehn_stage >=4) ~ UPDRSIIIaxial_imputed + 0.2231463*(0.3318533*sqrt(LEDD_total)),
+                                                is.na(LEDD_total) ~ UPDRSIIIaxial_imputed,
+                                                TRUE ~ NaN))
+
+# Remove some NAs. THese are samples that were missing the HY measure
+OPDC_final_LEDD <- OPDC_final_LEDD %>% 
+  filter(!is.na(UPDRSIIItotal_LEDDadjusted))
+
+saveRDS(OPDC_final_LEDD, "../Data_processed/ledd_adjusted/OPDC_LEDDadjusted_final.rds")
+```
+
+
+# Adjusting motor scores by LEDD - PPMI
+
+
+```{r}
+
+### From the use of PD medication file, we can use the ONLDOPA variable. If this variable is true for us, then adjust the motor outcome by LEDD.
+
+# Note that when doing this cleaning, since the Ldopa dose is not taking at all the time points, the sample size decreases sibstantially
+# However, since we keep the key visits ( BL, 18m after, and 36m after) I approved this
+PPMI_final_LEDD = PPMI_final %>% inner_join(PPMI, by = c("PATNO", "EVENT_ID"))
+dim(PPMI_final)
+dim(PPMI_final_LEDD)
+
+# In terms of the straitifcation based on HY, we will use the HY measure on the OFF state since we are working with OFF state motor scores
+# Im this case, we will adjust by LEDD if Levodopa has been used
+motorChanges = PPMI_final_LEDD %>%
+  mutate(HY_ST = case_when(NHY_ON <= 3 ~ "Low",
+                           NHY_ON >= 4 ~ "High",
+                           TRUE ~ as.character(NA))) %>%
+  filter(!is.na(HY_ST)) %>%
+  group_by(EVENT_ID, HY_ST) %>%
+  dplyr::summarise(count = n())
+
+# Also I notices that the number of NAs is considerable greater on HY measure during the OFF state
+# Because results do not change much between HY in ON and OFF ( See below )
+which(PPMI_final_LEDD$NHY_ON >= 4)
+which(PPMI_final_LEDD$NHY >= 4)
+# I have decided to use NHY_ON to decrease the reate of missingness on the LEDD adjusted motor scores
+
+# Note that:
+PPMI_final_LEDD %>% group_by(PD_MED_USE) %>% dplyr::summarise(count = n())
+# 1 == Ldopa only
+# 4 == Levodopa + Other
+# 5 == Levodopa + Dopamine Agonist
+# 7 == Levodopa + Dopamine Agonist + Other
+# Because the number of data points including 4, 5, 7 is not specially high, and because the calculation
+# of Leovodopa only LEDD is not straightforward, I will get rid of those samples
+
+PPMI_final_LEDD_filtered = PPMI_final_LEDD %>%
+  filter(!PD_MED_USE %in% c(4,5,7))
+
+
+PPMI_final_LEDD_filtered <- PPMI_final_LEDD_filtered %>%
+  mutate(UPDRSIIItotal_LEDDadjusted = case_when((PD_MED_USE == 1 & NHY_ON <= 3) ~ UPDRSIIItotal_imputed +  0.3620217*sqrt(LEDD),
+                                                (PD_MED_USE == 1 & NHY_ON  >= 4) ~ UPDRSIIItotal_imputed + 0.3318533*sqrt(LEDD),
+                                                PD_MED_USE %in% c(0,2,3,6) ~ UPDRSIIItotal_imputed,
+                                                TRUE ~ NaN),
+         UPDRSIIIlimb_LEDDadjusted = case_when((PD_MED_USE == 1 & NHY_ON <= 3) ~ UPDRSIIIlimb_imputed +  0.7768536*(0.3620217*sqrt(LEDD)),
+                                                (PD_MED_USE == 1 & NHY_ON >= 4) ~ UPDRSIIIlimb_imputed + 0.7768536*(0.3318533*sqrt(LEDD)),
+                                                PD_MED_USE %in% c(0,2,3,6) ~ UPDRSIIIlimb_imputed,
+                                                TRUE ~ NaN),
+          UPDRSIIIaxial_LEDDadjusted = case_when((PD_MED_USE == 1 & NHY_ON <= 3) ~ UPDRSIIIaxial_imputed +  0.2231463*(0.3620217*sqrt(LEDD)),
+                                                (PD_MED_USE == 1 & NHY_ON >= 4) ~ UPDRSIIIaxial_imputed + 0.2231463*(0.3318533*sqrt(LEDD)),
+                                                PD_MED_USE %in% c(0,2,3,6) ~ UPDRSIIIaxial_imputed,
+                                                TRUE ~ NaN))
+
+# Remove some NAs. THese are samples that were missing the HY measure
+PPMI_final_LEDD_filtered <- PPMI_final_LEDD_filtered %>% 
+  filter(!is.na(UPDRSIIItotal_LEDDadjusted))
+
+saveRDS(PPMI_final_LEDD_filtered, "../Data_processed/ledd_adjusted/PPMI_LEDDadjusted_final.rds")
+```
+
+
+# Adjusting PDBP
+
+
+```{r}
+
+
+PDBP_LEDD = PDBP_LEDD %>%
+  plyr::mutate(VisitTypPDBP = as.numeric(plyr::mapvalues(VisitTypPDBP, 
+                                              from = c("Baseline", "6 months", "12 months", "18 months", "24 months", 
+                                                       "30 months", "36 months", "42 months", "48 months", "60 months"), 
+                                              to = c(0, 6, 12, 18, 24, 30, 36, 42, 48, 60))) )
+
+PDBP_final_LEDD = PDBP %>%
+  inner_join(PDBP_LEDD, by = c("ID" = "SGUID", "visit_month" = "VisitTypPDBP")) %>%
+  dplyr::rename(HY = code_upd2hy_hoehn_and_yahr_stage)
+
+motorChanges = PDBP_final_LEDD %>%
+  mutate(HY_ST = case_when(HY <= 3 ~ "Low",
+                           HY >= 4 ~ "High",
+                           TRUE ~ as.character(NA))) %>%
+  filter(!is.na(HY_ST)) %>%
+  group_by(visit_month, HY_ST) %>%
+  dplyr::summarise(count = n())
+
+PDBP_final_LEDD <- PDBP_final_LEDD %>%
+  mutate(UPDRSIIItotal_LEDDadjusted = 
+           case_when((!is.na(DailyLevo) & HY <= 3) ~ UPDRSIIItotal_imputed + 0.3620217*sqrt(DailyLevo),
+                     (!is.na(DailyLevo) & HY  >=4) ~ UPDRSIIItotal_imputed + 0.3318533*sqrt(DailyLevo),
+                     is.na(DailyLevo) ~ UPDRSIIItotal_imputed,
+                     TRUE ~ NaN),
+         UPDRSIIIlimb_LEDDadjusted = 
+           case_when((!is.na(DailyLevo) & HY <= 3) ~ UPDRSIIIlimb_imputed +  0.7768536*(0.3620217*sqrt(DailyLevo)),
+                     (!is.na(DailyLevo) & HY >=4) ~ UPDRSIIIlimb_imputed +  0.7768536*(0.3318533*sqrt(DailyLevo)),
+                     is.na(DailyLevo) ~ UPDRSIIIlimb_imputed,
+                     TRUE ~ NaN),
+         UPDRSIIIaxial_LEDDadjusted = 
+           case_when((!is.na(DailyLevo) & HY <= 3) ~ UPDRSIIIaxial_imputed + 0.2231463*(0.3620217*sqrt(DailyLevo)),
+                     (!is.na(DailyLevo) & HY >=4) ~ UPDRSIIIaxial_imputed +  0.2231463*(0.3318533*sqrt(DailyLevo)),
+                     is.na(DailyLevo) ~ as.numeric(UPDRSIIIaxial_imputed),
+                     TRUE ~ NaN))
+         
+
+saveRDS(PDBP_final_LEDD, "../Data_processed/ledd_adjusted/PDBP_LEDDadjusted_final.rds")
+
+```
+
+
+

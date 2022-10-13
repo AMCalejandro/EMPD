@@ -1,0 +1,79 @@
+SCHEME STDERR
+AVERAGEFREQ ON
+MINMAXFREQ ON
+CUSTOMVARIABLE TotalSampleSize
+LABEL TotalSampleSize as Nsamples
+
+# LOAD INPUT FILES
+
+# Enable Genomic control correction
+GENOMICCONTROL ON
+SEPARATOR  WHITESPACE
+
+
+# === DESCRIBE AND PROCESS PROBAND ===
+MARKER SNP
+ALLELE A1 A2
+FREQ   MAF
+EFFECT est.sc.b2
+STDERR se.sc.b2
+#PVALUE pVal
+#WEIGHT N
+PROCESS /mnt/rreal/RDS/acarrasco/ANALYSES_WORKSPACE/EARLY_PD/PROBAND/RESULTS_TIDY/SNPtimeInteraction_V2/MONTHS_36/GWAS_axial.txt
+
+# === DESCRIBE AND PROCESS OPDC  ===
+# Accessing the OPDC GWAS for limb outcome after rerunning with the bug on the limb calculation fixed
+
+MARKER SNP
+ALLELE A1 A2
+FREQ   MAF
+EFFECT est.sc.b2
+STDERR se.sc.b2
+#PVALUE p.value
+#WEIGHT N
+PROCESS /mnt/rreal/RDS/acarrasco/ANALYSES_WORKSPACE/EARLY_PD/OPDC/RESULTS_TIDY/SNPtimeInteraction_V2/MONTHS_36/GWAS_axial.txt
+
+# === DESCRIBE AND PROCESS PPMI ===
+MARKER SNP
+ALLELE A1 A2
+FREQ   MAF
+EFFECT est.sc.b2
+STDERR se.sc.b2
+#PVALUE p.value
+#WEIGHT N
+PROCESS /mnt/rreal/RDS/acarrasco/ANALYSES_WORKSPACE/EARLY_PD/PPMI/PPMI_HG19/RESULTS_TIDY/SNPtimeInteraction_V2/MONTHS_36/GWAS_axial.txt
+
+# === DESCRIBE AND PROCESS PDSTAT ===
+MARKER SNP
+ALLELE A1 A2
+FREQ   MAF
+EFFECT Coeff_slope
+STDERR se_slope
+#PVALUE p.value
+#WEIGHT N
+PROCESS /mnt/rreal/RDS/acarrasco/ANALYSES_WORKSPACE/EARLY_PD/PDSTAT/RESULTS_TIDY/SNPtimeInteraction_V2/GWAS_modelBasic_axial.txt
+
+# === DESCRIBE AND PROCESS DIGPD ===
+MARKER SNP
+ALLELE A1 A2
+FREQ   MAF
+EFFECT est.sc.b2
+STDERR se.sc.b2
+#PVALUE p.value
+#WEIGHT N
+PROCESS /mnt/rreal/RDS/acarrasco/ANALYSES_WORKSPACE/EARLY_PD/DIGPD/RESULTS_TIDY/SNPtimeInteraction_V2/MONTHS_36/GWAS_axial.txt
+
+# === DESCRIBE AND PROCESS PDBP ===
+MARKER SNP
+ALLELE A1 A2
+FREQ   MAF
+EFFECT est.sc.b2
+STDERR se.sc.b2
+#PVALUE p.value
+#WEIGHT N
+PROCESS /mnt/rreal/RDS/acarrasco/ANALYSES_WORKSPACE/EARLY_PD/PDBP/PLINK1_DATA/RESULTS_TIDY/SNPtimeInteraction_V2/MONTHS_36/GWAS_axial.txt
+
+OUTFILE metal_pdstat.ppmi.proband.opdc.digpd.pdbp_SNPtimeInteraction.Rsq_0.8.axial_ .tbl
+ANALYZE HETEROGENEITY
+
+QUIT

@@ -1,0 +1,669 @@
+---
+title: 'Data wrangling'
+author: 
+- name: "Alejandro M.Carrasco"
+  affiliation: UCL
+output: 
+  html_document:
+    code_folding: hide
+    theme: paper
+    highlight: kate
+    df_print: paged
+    toc: true
+    toc_float: true
+    number_sections: true
+---
+
+
+```{r setup, hide = TRUE}
+library(tidyverse)      # For tidy manipulation of data
+library(here)           # For file path construction
+library(DT)             # To display data tables
+library(readxl)         # To read excel files
+library(stringr)        # To do string operations
+library(kableExtra)     # To display fancy tables
+library(plyr)
+
+theme_rhr <-  theme_bw(base_family = "Helvetica") +
+  theme(panel.grid.major.x = element_blank(),
+        legend.position = "right",
+        strip.text = element_text(size = 8),
+        strip.text.y = element_text(angle = 90),
+        axis.text.x = element_text(size = 8, angle = 90, hjust = 1, vjust = 0.5),
+        axis.text.y = element_text(size = 8),
+        axis.title.y = element_text(vjust = 0.6),
+        axis.title = element_text(size = 10),
+        panel.spacing = unit(0.1, "lines"))
+knitr::opts_chunk$set(echo = T, warning = F, message= F)
+
+```
+
+```{r}
+getwd()
+```
+
+
+# Description
+
+For each dataset we do the required wrangling to come up with a QC clinical data we can use in our study.
+
+# Loas all data needed
+
+```{r}
+# Loading imputed outcome variables based on 80% total terms avaialbility and also computed PCs after cleaning the data
+TPD_outcome <- read.csv("../Data_processed/clinicalData_Imputed/TPD_0.8.imputed.txt", sep = ",", header = TRUE)
+OPDC_outcome <- read.csv("../Data_processed/clinicalData_Imputed/OPDC_0.8.imputed.txt", sep = ",", header = TRUE)
+PPMI_outcome <- read.csv("../Data_processed/clinicalData_Imputed/PPMI_0.8.imputed.txt")
+PDSTAT_outcome <- read.csv("../Data_processed/clinicalData_Imputed/PDSTAT_0.8.imputed.txt", header = T, colClasses=c("StudyNumber"="character"))
+DIGPD_outcome <- read.csv("../Data_processed/clinicalData_Imputed/DIGPD_0.8.imputed.txt")
+
+TPD_outcome_all = read.csv("../Data_processed/clinicalData_Imputed/TPD_0.8.imputed.AllVisits.txt", sep = ",", header = TRUE)
+OPDC_outcome_all <- read.csv("../Data_processed/clinicalData_Imputed/OPDC_0.8.imputed.AllVisits.txt", sep = ",", header = TRUE)
+PPMI_outcome_all = read.csv("../Data_processed/clinicalData_Imputed/PPMI_0.8.imputed.AllVisits.txt")
+DIGPD_outcome_all = read.csv("../Data_processed/clinicalData_Imputed/DIGPD_0.8.imputed.AllVisits.txt")
+
+# Raw clinical data loading 
+P3_TPD <- as_tibble(read.csv("~/Data/WorkingDirectory/PROBAND/clinical_data/P3_TPD_Version2_temp_06_16_2020.csv"))
+P3_full_extract_with_relations <- as_tibble(read.csv("~/Data/WorkingDirectory/PROBAND/clinical_data/P3_full_extract_with_relations.csv"))
+OPDC <- as_tibble(read.csv("~/Data/WorkingDirectory/OPDC/clinical_data/Discovery_FU_data_with_onset_2021_04.csv", header = T, na.strings = c("","NA")))
+PPMI_Original_Cohort <- read.csv("/home/amcalejandro/Data/WorkingDirectory/PPMI/clinical_data/PPMI_Original_Cohort_BL_to_Year_5_Dataset_Apr2020.csv")
+PPMI_UPDRSIII<- as_tibble(read.csv("/home/amcalejandro/Data/WorkingDirectory/PPMI/clinical_data/MDS_UPDRS_Part_III.csv"))
+PPMI_UPDRSII <- read.csv("~/Data/WorkingDirectory/PPMI/clinical_data/MDS_UPDRS_Part_II__Patient_Questionnaire.csv")
+PPMI_PD_IDs <- read.delim("/home/amcalejandro/Data/WorkingDirectory/PPMI/clinical_data/PD_IDs.txt", header=FALSE) 
+PDSTAT_demographics  <- readxl::read_xlsx("~/Data/WorkingDirectory/PDSTAT/clinical_data/Export_check.xlsx")
+PDSTAT_UPDRSIII <-  readxl::read_xlsx("/home/amcalejandro/Data/WorkingDirectory/PDSTAT/clinical_data/FUP_Export_CRF_MDSUPDRS_PartIII_Off.xlsx")
+PDSTAT_UPDRSII <-  readxl::read_xlsx("/home/amcalejandro/Data/WorkingDirectory/PDSTAT/clinical_data/Export_QB_MDSUPDRS.xlsx")
+DIGPD <- readxl::read_xlsx("~/Data/WorkingDirectory/DIGPD_DATA/dig_pd_2019_11_Alejandro.xlsx")
+
+
+# fam files and codebreakers
+fam_opdc <- read.table("~/Data/WorkingDirectory/OPDC/genetic_data/OXFORD.fam", quote="\"", comment.char="")
+codebreak_tpd <- read_excel("~/Data/WorkingDirectory/PROBAND/clinical_data/Proband.Geno.Pheno_original.xlsx")
+fam_tpd <- read.table("~/Data/WorkingDirectory/PROBAND/HTS_HD_Chips_MAF_GENO_HWE_MIND-updated.fam", quote="\"", comment.char="")
+fam_ppmi <- read.table("~/Data/WorkingDirectory/PPMI/genetic_data/PPMI_HG19_2020.fam")
+fam_pdstat <- read.table("~/Data/WorkingDirectory/PDSTAT/genetic_data/PDSTAT.fam", quote="\"", comment.char="")
+codebreak_pdstat <- read.csv("~/Data/WorkingDirectory/PDSTAT/clinical_data/PDSTAT_NEUROCHIP_IDs.txt", sep = "\t", header = T)
+codebreak_digpd <- readxl::read_xlsx("~/Data/WorkingDirectory/DIGPD_DATA/DIGPD_CLINICAL_TO_GENETIC_ID_CORRESPONDENCE.xlsx")
+fam_digpd <- read.table("~/Data/WorkingDirectory/DIGPD_DATA/MEGA.DIGPD.ALL.GC015.fam")
+```
+
+
+# OPDC data wrangling
+
+
+```{r}
+# Looking at patients with a disease duration higher than 4 years
+OPDC_disdur <- OPDC %>% 
+  filter( (visit == 1) & (disease_duration_onset > 4)) %>% select(subjid)
+cat("Number of people with disease duration from onset to BL higher than four years:", dim(OPDC_disdur)[1])
+
+OPDC_disdur <- OPDC_disdur %>%
+  mutate(subjid = str_replace_all(subjid, c("PDS/" = "", "/" = ""))) %>%
+  dplyr::rename(ID = subjid) %>%
+  mutate(ID = paste(ID, ID, sep = "_"))
+
+OPDC <- OPDC %>%
+  mutate(Centre = str_split_fixed(subjid, pattern = "/", n = 3)[,2]) 
+
+# Get variables and process
+OPDC_tmp <- OPDC %>%
+  dplyr::select(subjid, visit, Centre, gender,
+                disease_duration,disease_duration_onset,
+                age_diag, age_onset,  UPDRS_phenotype_cat, HY = af_hoehn_stage, UPDRS_II) %>%
+  mutate(gender = as.factor(gender),
+         subtype_cat = as.factor(UPDRS_phenotype_cat),
+         Centre = as.factor(Centre)) %>%
+  select(-UPDRS_phenotype_cat) %>%
+   ddply(., c("visit"), transform, 
+        age_diag.std = scale(age_diag), 
+        disease_duration.std = scale(disease_duration))
+  
+# Final dataset
+OPDC_final <- OPDC_tmp %>%
+  inner_join(OPDC_outcome, by = c("subjid", "visit")) %>%
+  arrange(subjid, visit)
+
+OPDC_final_allVisits <- OPDC_tmp %>%
+  inner_join(OPDC_outcome_all, by = c("subjid", "visit")) %>%
+  arrange(subjid, visit) 
+
+# I consider essential the BL outcome measure is available. If not, I drop those
+ID_BLna <- OPDC_final %>% 
+  filter( (visit == 1) & (
+    is.na(UPDRSIIItotal_imputed) | 
+    is.na(UPDRSIIIlimb_imputed) | 
+    is.na(UPDRSIIIaxial_imputed)) )  %>%
+  pull(subjid)
+
+OPDC_final <- OPDC_final %>% filter(!subjid %in% ID_BLna)
+OPDC_final_allVisits <- OPDC_final_allVisits %>% filter(!subjid %in% ID_BLna)
+# Now, we also exclude patients having na at visit 4 or 7
+# I will need to put all of this on a list of data frames following Regina's strategy
+OPDC_final_updrstotal <- OPDC_final %>% filter(!is.na(UPDRSIIItotal_imputed) )
+OPDC_final_updrsaxial <- OPDC_final %>% filter(!is.na(UPDRSIIIaxial_imputed))
+OPDC_final_updrslimb <- OPDC_final %>% filter(!is.na(UPDRSIIIlimb_imputed))
+
+
+OPDC_final <- OPDC_final %>% filter(!(is.na(UPDRSIIItotal_imputed) |
+                                                 (is.na(UPDRSIIIaxial_imputed)) |
+                                                 (is.na(UPDRSIIIlimb_imputed))))
+
+
+# Explore the outcome
+OPDC_final %>% select(visit, ends_with("imputed")) %>%
+  group_by(visit) %>%
+  dplyr::summarise(across(everything(), list(mean = mean, sd = sd)))
+
+OPDC_final_allVisits %>% select(visit, ends_with("imputed")) %>%
+  group_by(visit) %>%
+  dplyr::summarise(across(everything(), list(mean = ~ mean(.x, na.rm = TRUE), sd = ~ sd(.x, na.rm = TRUE))))
+
+
+# Get the plink files
+OPDC_BL <- OPDC_final %>% 
+  filter(visit == 1)
+
+plink_metadata <- OPDC_BL %>%
+  mutate(subjid = str_replace_all(subjid, c("PDS/" = "", "/" = "")),
+                                        SEX  = ifelse(as.character(gender) == "male","1", "2")) %>%
+    inner_join(fam_opdc %>% dplyr::select(V1,V2), by = c("subjid" = "V2")) %>%
+    dplyr::rename(FID = V1, IID = subjid) %>%
+    dplyr::relocate(FID, .before = IID)
+
+OPDC_plink.samples <- plink_metadata %>% dplyr:: select(FID, IID)
+OPDC_plink.sex <- plink_metadata %>% dplyr::select(FID, IID, SEX)
+
+OPDC_final <- OPDC_final %>%
+  mutate(subjid = str_replace_all(subjid, c("PDS/" = "", "/" = ""))) %>%
+  dplyr::rename(ID = subjid) %>%
+  mutate(ID = paste(ID, ID, sep = "_"))
+
+OPDC_final_allVisits = OPDC_final_allVisits %>%
+  mutate(subjid = str_replace_all(subjid, c("PDS/" = "", "/" = ""))) %>%
+  dplyr::rename(ID = subjid) %>%
+  mutate(ID = paste(ID, ID, sep = "_"))
+
+# Save the data
+saveRDS(OPDC_final, "../Data_processed/Rfiles_modelFitting.automationOutline/OPDC/OPDC_final.rds") # Comment out if not existing
+saveRDS(OPDC_final_allVisits, "../Data_processed/Rfiles_modelFitting.automationOutline/OPDC/OPDC_final_allVisits.rds")
+```
+
+
+# TPD data wrangling
+
+
+```{r}
+# Looking at patients with a disease duration higher than 4 years
+TPD_disdur <- P3_TPD %>% filter((time_onset_to_diag + disease_duration_diag_V1) > 4) %>%
+  select(ID) 
+cat("Number of people with disease duration from onset to BL higher than four years:", dim(TPD_disdur)[1])
+
+# We first impute the age onset based on mean sample age onset for those individuals that miss it
+cat("Individuals missing AAO:", length(which(is.na(P3_TPD$age_onset))))
+cat("Number of individuals missing age at diagnosis:", max(c(length(which(is.na(P3_TPD$age_V1))), length(which(is.na(P3_TPD$disease_duration_diag_V1))))))
+
+# Getting PD patients
+TPD_PDonly <- P3_TPD %>% 
+  filter(change_diagnosis == "")
+
+#Make new variable for age at diagnosis
+TPD_PDonly <- TPD_PDonly %>% 
+  mutate(age_diag = age_V1 - disease_duration_diag_V1,
+         age_onset_imput = ifelse(!is.na(age_onset), age_onset, (age_diag - mean(time_onset_to_diag, na.rm = TRUE))),
+         dis_dur_onset_BL = time_onset_to_diag + disease_duration_diag_V1)
+
+# Check if there are patients with a disease duration > 4 from onset to BL
+dis_dur_4yrs = TPD_PDonly %>% filter(disease_duration_diag_V1 > 4 )
+cat("Number of people with disease duration for dignosis to BL higher than four years:", dim(dis_dur_4yrs)[1])
+
+
+TPD_PDonly_tmp <- TPD_PDonly %>% 
+  dplyr::select(ID, gender, age_onset, age_onset_imput, age_diag, time_onset_to_diag,
+                subtype_ratio, subtype_cat, dis_dur_onset_BL,
+                starts_with(c("disease_duration_diag", "age_V")),
+                ends_with(c("hoehn_and_yahr_stage", "UPDRS_II_total"))) %>%
+  dplyr::mutate(gender = as.factor(recode(gender, `1` = "female", `0` = "male" )),
+         subtype_cat = as.factor(subtype_cat))
+
+
+# Getting the study centre useful for our models adjustments
+TPD_PDonly_tmp <- TPD_PDonly_tmp %>%
+  left_join(P3_full_extract_with_relations %>% dplyr::select(Centre, ID), by = "ID") %>%
+  mutate(Centre = as.factor(Centre))
+
+
+### Reshape the data from wide to long format
+TPD_PDonly_long_tmp <- reshape(as.data.frame(TPD_PDonly_tmp),
+                           idvar = "ID", 
+                           direction = "long",
+                           varying = list(c(10,12:16), c(17,19:23), c(24:29), c(30:35)),
+                           timevar = "visit_number", times = c(1, 4, 7, 9, 10 , 11),
+                           v.names = c("disease_duration_diag", "age", "HY", "UPDRS_II_total")) %>% 
+  select(-c(disease_duration_diag_V2,age_V2))
+
+# Final dataset
+TPD_final <- TPD_PDonly_long_tmp %>%
+  inner_join(TPD_outcome) %>%
+  arrange(ID, visit_number) %>%
+  relocate(visit_number, .after = ID) %>%
+  dplyr::rename(UPDRS_II = UPDRS_II_total)
+
+TPD_final_allVisits <- TPD_PDonly_long_tmp %>%
+  inner_join(TPD_outcome_all) %>%
+  arrange(ID, visit_number) %>%
+  relocate(visit_number, .after = ID) %>%
+  dplyr::rename(UPDRS_II = UPDRS_II_total)
+
+# I consider essential the BL outcome measure is available. If not, I drop those
+ID_BLna <- TPD_final %>% 
+  filter( (visit_number == 1) & (
+    is.na(UPDRSIIItotal_imputed) | 
+    is.na(UPDRSIIIlimb_imputed) | 
+    is.na(UPDRSIIIaxial_imputed) ) )  %>%
+  pull(ID)
+
+TPD_final <- TPD_final %>% filter(!ID %in% ID_BLna)
+TPD_final_allVisits <- TPD_final_allVisits %>% filter(!ID %in% ID_BLna)
+
+# Look at outcome distribution
+psych::describe(x = TPD_final[,c(8,10,12)])
+
+# Now, we also exclude patients having na at visit 4 or 7
+TPD_final_updrstotal <- TPD_final %>% filter(!is.na(UPDRSIIItotal_imputed) )
+TPD_final_updrsaxial <- TPD_final %>% filter(!is.na(UPDRSIIIaxial_imputed))
+TPD_final_updrslimb <- TPD_final %>% filter(!is.na(UPDRSIIIlimb_imputed))
+
+
+TPD_final <- TPD_final %>% filter(!(is.na(UPDRSIIItotal_imputed) |
+                                                 (is.na(UPDRSIIIaxial_imputed)) |
+                                                 (is.na(UPDRSIIIlimb_imputed))))
+
+
+## Get the plink files
+TPD_BL <- TPD_final %>% 
+  filter(visit_number == 1)
+
+# Getting the FID_IIF variable to merge with PCs afterwards
+TPD_final <- TPD_final %>%
+  inner_join(codebreak_tpd %>% select(IID, Kate.Patient.ID), by = c("ID" = "Kate.Patient.ID")) %>%
+  inner_join(fam_tpd %>% select(V1, V2), by = c("IID" = "V2")) %>%
+  mutate(FID_IID = str_c(V1, "_", IID)) %>%
+  relocate(FID_IID, .after = ID) %>%
+  select(-c(IID, V1))
+
+TPD_final_allVisits <- TPD_final_allVisits %>%
+  inner_join(codebreak_tpd %>% select(IID, Kate.Patient.ID), by = c("ID" = "Kate.Patient.ID")) %>%
+  inner_join(fam_tpd %>% select(V1, V2), by = c("IID" = "V2")) %>%
+  mutate(FID_IID = str_c(V1, "_", IID)) %>%
+  relocate(FID_IID, .after = ID) %>%
+  select(-c(IID, V1))
+
+plink_files <- TPD_BL %>% 
+  inner_join(codebreak_tpd %>% select(IID, Kate.Patient.ID), by = c("ID" = "Kate.Patient.ID")) %>%
+  mutate(gender = recode(gender, "male" = 1, "female" = 2)) %>%
+  select(IID,gender)
+
+plink_probandSex <- plink_files %>% 
+  inner_join(fam_tpd %>% select(V1, V2), by = c("IID" = "V2")) %>%
+  dplyr::rename(FID = V1) %>%
+  relocate(FID, .before = IID)
+
+plink_probandSamples <- plink_probandSex %>%
+  select(-gender)
+
+
+# Save the data
+saveRDS(TPD_final, "../Data_processed/Rfiles_modelFitting.automationOutline/PROBAND/TPD_final.rds")
+saveRDS(TPD_final_allVisits, "../Data_processed/Rfiles_modelFitting.automationOutline/PROBAND/TPD_final_allVisits.rds")
+```
+
+
+# PPMI data wrangling
+
+```{r}
+# Function to check unlikely treatment combinations
+checking_function <- function(values) {
+  if (length(values) == 2) {
+    if ((2 %in% values) & (NA %in% values)) {return("remove") }
+    else if ((1 %in% values) & (NA %in% values)) {return("remove") }
+    else {return("keep")}
+  }
+  else{return("keep")
+  }
+}
+
+# Looking at patients that changed diagnosis
+PPMI_misdiagnosed <- PPMI_Original_Cohort %>%
+  select(PATNO, SITE, EVENT_ID, changedx, primdiag) %>%
+  group_by(PATNO) %>%
+  arrange(desc(EVENT_ID)) %>%
+  filter(row_number() == 1) %>%
+  ungroup() %>%
+  filter(changedx == 1) %>% pull(PATNO)
+
+# Also we arrange the data so that we get the subtype_category information at BL.
+PPMI_Original_Cohort_filt <- PPMI_Original_Cohort %>% 
+  select(PATNO, Centre = SITE, EVENT_ID, agediag, ageonset, duration, age,
+         gender = gen, td_pigd_old, duration)  %>%
+  filter(PATNO %in% PPMI_outcome$PATNO) %>%
+  filter(!PATNO %in% PPMI_misdiagnosed) %>%
+  group_by(PATNO) %>% arrange(EVENT_ID) %>%
+  filter(row_number() == 1) %>% ungroup() %>% 
+  mutate(gender = as.factor(recode(gender, `1` = "male", `2` = "female" )),
+         Centre = as.factor(as.character(Centre)),
+         agediag.std = scale(agediag),
+         duration.std = scale(duration),
+         subtype_cat = case_when(td_pigd_old == 1 ~ "td",
+                                 td_pigd_old == 2 ~ "pigd",
+                                 td_pigd_old == 3 ~ "indeterminate",
+                                 TRUE ~ NA_character_),
+         subtype_cat = as.factor(subtype_cat)) %>%
+  dplyr::select(-c(EVENT_ID, td_pigd_old)) 
+  
+# Getting disease duration from onset to BL
+PPMI_Original_Cohort_filt <- PPMI_Original_Cohort_filt %>%
+  mutate(dis_dur_onsetBL = (agediag-ageonset) + (duration/12))
+
+
+# GETINNG HY AND UPDRS II #
+# Getting the MDS-UPDRS part II measures
+PPMI_UPDRSII_total = PPMI_UPDRSII %>%
+  rowwise() %>%
+  dplyr::mutate(UPDRSII = sum(c_across(starts_with("NP2")))) %>% ungroup() 
+
+# Check imposible doseErrors combinations
+PPMI_UPDRSIII_cleaned <- PPMI_UPDRSIII %>%
+  group_by(PATNO, EVENT_ID) %>%
+  arrange(ON_OFF_DOSE) %>% 
+  mutate(ONOFF_COMB = list(unique(ON_OFF_DOSE)),
+         doseErrors_check = unlist(map(ONOFF_COMB, checking_function))) %>%
+  ungroup()
+
+# Remove patients with erroneous combinations.
+PPMI_UPDRSIII_cleaned<- PPMI_UPDRSIII_cleaned %>% 
+  filter(!doseErrors_check == "remove") %>%
+  select(-c(ONOFF_COMB, doseErrors_check))
+  
+PPMI_UPDRSIII_cleaned_filt <- PPMI_UPDRSIII_cleaned %>%
+  group_by(PATNO, EVENT_ID) %>%
+  arrange(ON_OFF_DOSE) %>%
+  filter(row_number() == 1) %>% ungroup()
+
+PPMI_UPDRSIII_cleaned_filt = PPMI_UPDRSIII_cleaned_filt %>%
+  filter(ON_OFF_DOSE == 1 | is.na(ON_OFF_DOSE))
+
+# Generate final df
+PPMI_final <- PPMI_outcome %>% 
+  left_join(PPMI_Original_Cohort_filt, by = c("PATNO")) %>%
+  left_join(PPMI_UPDRSIII_cleaned_filt %>% dplyr::select(PATNO, EVENT_ID, NHY)) %>%
+  left_join(PPMI_UPDRSII_total %>% dplyr::select(PATNO, EVENT_ID, UPDRSII)) %>%
+  dplyr::relocate(c("agediag","agediag.std","Centre",
+                    "gender", "subtype_cat", "ageonset", 
+                    "duration", "duration.std"), .after = "EVENT_ID") %>%
+  mutate(PATNO = paste0("PPMI", PATNO)) %>%
+  arrange(PATNO, EVENT_ID)
+
+PPMI_final_allVisits <- PPMI_outcome_all %>% 
+  left_join(PPMI_Original_Cohort_filt, by = c("PATNO")) %>%
+   left_join(PPMI_UPDRSIII_cleaned_filt %>% dplyr::select(PATNO, EVENT_ID, NHY)) %>%
+  left_join(PPMI_UPDRSII_total %>% dplyr::select(PATNO, EVENT_ID, UPDRSII)) %>%
+  dplyr::relocate(c("agediag","agediag.std","Centre","gender", "subtype_cat",
+                    "ageonset", "duration", "duration.std"), .after = "EVENT_ID") %>%
+  mutate(PATNO = paste0("PPMI", PATNO)) %>%
+  arrange(PATNO, EVENT_ID)
+
+
+
+# If a patients is missing the BL entry, we exclude that patient. If a patient miss any other
+# point, we only exclude that point.
+
+ID_BLna <- PPMI_final %>% 
+  filter( (EVENT_ID == "BL") & (
+    is.na(UPDRSIIItotal_imputed) | 
+    is.na(UPDRSIIIlimb_imputed) | 
+    is.na(UPDRSIIIaxial_imputed) ) )  %>%
+  pull(PATNO)
+
+# None of the patients missed the MDS UPDRS III derived BL motor score
+ID_BLna
+
+# Now, we also exclude patients having na at visit 4 or 7
+PPMI_final_updrstotal <- PPMI_final %>% filter(!is.na(UPDRSIIItotal_imputed))
+PPMI_final_updrsaxial <- PPMI_final %>% filter(!is.na(UPDRSIIIaxial_imputed))
+PPMI_final_updrslimb <- PPMI_final %>% filter(!is.na(UPDRSIIIlimb_imputed))
+
+# Generate plink files
+plink_ppmiSex <- PPMI_final %>% 
+  select(PATNO, gender) %>% 
+  inner_join(fam_ppmi %>% select(V1, V2), by = c("PATNO" = "V2")) %>%
+  distinct() %>% # Getting one entry per FID-IID
+  mutate(gender = recode(gender, "male" = 1, "female" = 2)) %>%
+  dplyr::rename(FID = V1, IID = PATNO)  %>%
+  relocate(FID, .before = IID)
+
+plink_ppmiSamples <- plink_ppmiSex %>%
+  select(-gender)
+
+
+# Sacve clinical data
+saveRDS(PPMI_final, "../Data_processed/Rfiles_modelFitting.automationOutline/PPMI/PPMI_final.rds")
+saveRDS(PPMI_final_allVisits, "../Data_processed/Rfiles_modelFitting.automationOutline/PPMI/PPMI_final_allVisits.rds")
+```
+
+
+# PDSTAT data wrangling
+
+
+```{r}
+# Dealing with sample overlap among studies
+# We find the samples that took part in studies we already used for our analysis
+pattern_remove <- c("Tracking Parkinson", "Discovery","Oxford","Proband", "OPDC")
+
+PDSTAT_demographics <- PDSTAT_demographics %>%
+  mutate(overlap = ifelse(is.na(M12_GSS_StudyName), "keep",
+                          ifelse(grepl(paste(pattern_remove, collapse = "|"), 
+                                       M12_GSS_StudyName), "remove", "keep"))) %>%
+  filter(overlap != "remove") %>%
+  dplyr::select(-overlap) 
+
+# Get the demographics needed. Then joining with the outcome variables
+# Of note, we do not have age at diagnosis
+PDSTAT_final <- PDSTAT_demographics %>%
+  dplyr::select(StudyNumber, CentreID, Screening_Gender, Screening_Age, Screening_AgeOnsetPD) %>%
+  dplyr::rename(ID = StudyNumber, Centre = CentreID, 
+                Gender = Screening_Gender, age_studyEntry = Screening_Age,
+                age_onset = Screening_AgeOnsetPD) %>%
+  inner_join(PDSTAT_outcome, by = c("ID" = "StudyNumber")) %>%
+  dplyr::relocate(visit_number, .after = "ID") %>%
+  arrange(ID, visit_number) %>%
+  mutate(Gender = as.factor(recode(Gender, `2` = "female", `1` = "male")),
+                Centre = as.factor(as.character(Centre))) %>%
+  ddply(., c("visit_number"), transform, 
+        age_onset.std = scale(age_onset), 
+        age_studyEntry.std = scale(age_studyEntry)) %>%
+  dplyr::relocate(ends_with("std"), .after = age_onset)
+
+# Getting the disease duration from onset
+PDSTAT_final <- PDSTAT_final %>%
+  mutate(dis_dur_OnsetBL = age_studyEntry - age_onset)
+
+# Some code to get UPDRSII and HY measures
+UPDRSII_HY = PDSTAT_UPDRSII %>% 
+   dplyr::select(c(StudyNumber, (!starts_with("M26") & ends_with("Total")))) %>%
+   inner_join(PDSTAT_UPDRSIII %>% dplyr::select(StudyNumber, ends_with("Off_HAndYStage"))) %>%
+  gather(UPDRSIII_measure, score, -StudyNumber) %>% 
+  mutate(visit_number = as.numeric(str_sub(UPDRSIII_measure, 2, 3)),
+          UPDRSIII_measure = gsub("^.*_", "", UPDRSIII_measure)) %>%
+  spread(UPDRSIII_measure, score) %>%
+  naniar::replace_with_na_all(condition = ~.x == 999) %>%
+  dplyr::rename(HY = HAndYStage, UPDRSII = Total, ID = StudyNumber)
+
+  
+PDSTAT_final = PDSTAT_final %>% 
+  inner_join(UPDRSII_HY)
+
+
+
+# I consider essential the BL outcome measure is available. If not, I drop those
+ID_BLna <- PDSTAT_final %>% 
+  filter( (visit_number == 0) & (
+    is.na(UPDRSIIItotal_imputed) | 
+    is.na(UPDRSIIIlimb_imputed) | 
+    is.na(UPDRSIIIaxial_imputed) ) )  %>%
+  pull(ID)
+# There is no people missing the outcome at BL
+
+
+# Check the outcomes distribution
+psych::describe(x = PDSTAT_final[,c(6,8,10)])
+
+# Now, we also exclude patients having na at visit 4 or 7
+PDSTAT_final_updrstotal <- PDSTAT_final %>% filter(is.na(UPDRSIIItotal_imputed) )
+PDSTAT_final_updrsaxial <- PDSTAT_final %>% filter(is.na(UPDRSIIIaxial_imputed))
+PDSTAT_final_updrslimb <- PDSTAT_final %>% filter(is.na(UPDRSIIIlimb_imputed))
+
+
+PDSTAT_final <- PDSTAT_final %>% filter(!(is.na(UPDRSIIItotal_imputed) |
+                                                 (is.na(UPDRSIIIaxial_imputed)) |
+                                                 (is.na(UPDRSIIIlimb_imputed))))
+
+# Generate the plink files
+PDSTAT_BL <- PDSTAT_final %>% 
+  filter(visit_number == 0)
+
+codebreak_pdstat <- codebreak_pdstat %>%
+  mutate(Study.ID = str_remove(Study.ID, "[^\\d]*"))
+
+PDSTAT_BL <- PDSTAT_BL %>%
+  inner_join(codebreak_pdstat, by = c("ID" = "Study.ID"))
+
+PDSTAT_BL_FAM <- PDSTAT_BL %>%
+  dplyr::rename(IID = DNA_ID) %>%
+  inner_join(fam_pdstat %>% select(V1,V2) %>% dplyr::rename(FID = V1, IID = V2), by = "IID") 
+  
+plink_pdstatsample <- PDSTAT_BL_FAM %>% select(FID, IID)
+plink_pdstatsex <- PDSTAT_BL_FAM %>% select(FID, IID, Gender) %>%
+  mutate(Gender = recode(as.character(Gender), "male" = 1, "female" = 2))
+  
+
+# Get the final clinical QC data
+PDSTAT_final <- PDSTAT_final %>% 
+  left_join(codebreak_pdstat, by = c("ID" = "Study.ID")) %>%
+  left_join(plink_pdstatsample, by = c("DNA_ID" = "IID")) %>%
+  drop_na(DNA_ID) %>%
+  mutate(FID_IID = paste(FID, DNA_ID, sep = "_")) %>%
+  select(-c(FID, DNA_ID)) %>%
+  dplyr::relocate(FID_IID, .after = ID)
+
+# Checking the disease duration mean and sd
+PDSTAT_final %>%
+  filter(visit_number == 0) %>% 
+  dplyr::summarise(mean = mean(dis_dur_OnsetBL),
+                   sd = sd(dis_dur_OnsetBL))
+
+
+# Save the data
+saveRDS(PDSTAT_final, "../Data_processed/Rfiles_modelFitting.automationOutline/PDSTAT/PDSTAT_final.RDS")
+```
+
+
+# DIGPD data wrangling
+
+
+```{r}
+DIGPD_filter <- DIGPD %>%
+  dplyr::select(PATIENT, visite, SEXE, ONOFFSTATE, duree_symp, SCOREII, HOEHNandYAHR) %>%
+  filter(ONOFFSTATE == 1) %>%
+  #inner_join(DIGPD_outcome, by = c("PATIENT", "visite")) %>%
+  inner_join(DIGPD %>% filter(visite == 1) %>% select(PATIENT, Age_diag, Age_symp, AgeInclusion)) %>%
+  dplyr::rename(ID = PATIENT, visit_number = visite ,Gender = SEXE,
+                age_diag = Age_diag, age_onset = Age_symp,
+                dis_dur_OnsetBL = duree_symp,
+                UPDRS_II = SCOREII, HY = HOEHNandYAHR) %>%
+  arrange(ID, visit_number) %>%
+  relocate(starts_with("age"), .after= Gender)
+
+# Then we do some data recodification / scaling
+DIGPD_filter <- DIGPD_filter %>%
+  mutate(Gender = as.factor(recode(Gender, `2` = "female", `1` = "male")),
+         visit_number = visit_number -1,
+         disdur_diag_Inclusion = AgeInclusion - age_diag) %>%
+    ddply(., c("visit_number"), transform, 
+          age_onset.std = scale(age_onset), 
+          age_diag.std = scale(age_diag),
+          disdur_diag_Inclusion.std = scale(disdur_diag_Inclusion)) %>%
+    dplyr::relocate(ends_with("std"), .after = age_onset)
+
+DIGPD_outcome = DIGPD_outcome %>%
+  mutate(visite = visite -1)
+DIGPD_outcome_all = DIGPD_outcome_all %>%
+  mutate(visite = visite - 1)
+
+DIGPD_final = DIGPD_filter %>%
+   inner_join(DIGPD_outcome, by = c("ID" = "PATIENT", "visit_number" = "visite")) 
+DIGPD_final_all = DIGPD_filter %>%
+   inner_join(DIGPD_outcome_all, by = c("ID" = "PATIENT", "visit_number" = "visite")) 
+
+
+
+
+# I consider essential the BL outcome measure is available. If not, I drop those
+ID_BLna <- DIGPD_final %>% 
+  filter( (visit_number == 0) & (
+    is.na(UPDRSIIItotal_imputed) | 
+    is.na(UPDRSIIIlimb_imputed) ) )  %>%
+  pull(ID)
+
+# I exclude 1 people because they are missing the outcome measure at BL for total and/or limb outcomes
+DIGPD_final <- DIGPD_final %>% filter(!ID %in% ID_BLna)
+DIGPD_final_all <- DIGPD_final_all %>% filter(!ID %in% ID_BLna)
+# Now, we also measures having na at visit at 12, 24 or 36 months from BL
+# For limb and total outcomes only, again
+DIGPD_final_updrstotal <- DIGPD_final %>% filter(is.na(UPDRSIIItotal_imputed) )
+DIGPD_final_updrslimb <- DIGPD_final %>% filter(is.na(UPDRSIIIlimb_imputed))
+
+# In this case, we only exclude time points according to the total and the limb outcoms
+DIGPD_final <- DIGPD_final %>% filter(!(is.na(UPDRSIIItotal_imputed) |
+                                     is.na(UPDRSIIIlimb_imputed)))
+
+
+# Get plink files
+DIGPD_BL <- DIGPD_final %>% 
+  filter(visit_number == 0)
+
+codebreak_digpd <- codebreak_digpd
+
+DIGPD_BL <- DIGPD_BL %>%
+  inner_join(codebreak_digpd, by = c("ID" = "CLINICAL_ID"))
+
+DIGPD_BL_FAM <- DIGPD_BL %>%
+  dplyr::rename(IID = GENETIC_ID) %>%
+  inner_join(fam_digpd %>% select(V1,V2) %>% dplyr::rename(FID = V1, IID = V2), by = "IID") 
+  
+plink_digpdsample <- DIGPD_BL_FAM %>% select(FID, IID)
+plink_digpdsex <- DIGPD_BL_FAM %>% select(FID, IID, Gender) %>%
+  mutate(Gender = recode(as.character(Gender), "male" = 1, "female" = 2))
+  
+
+# Get the final data
+DIGPD_final <- DIGPD_final %>% 
+  left_join(codebreak_digpd, by = c("ID" = "CLINICAL_ID")) %>%
+  left_join(plink_digpdsample, by = c("GENETIC_ID" = "IID")) %>%
+  drop_na(GENETIC_ID) %>%
+  mutate(FID_IID = paste(FID, GENETIC_ID, sep = "_")) %>%
+  select(-c(FID, GENETIC_ID)) %>%
+  dplyr::relocate(FID_IID, .after = ID)
+
+DIGPD_final_all <- DIGPD_final_all %>% 
+  left_join(codebreak_digpd, by = c("ID" = "CLINICAL_ID")) %>%
+  left_join(plink_digpdsample, by = c("GENETIC_ID" = "IID")) %>%
+  drop_na(GENETIC_ID) %>%
+  mutate(FID_IID = paste(FID, GENETIC_ID, sep = "_")) %>%
+  select(-c(FID, GENETIC_ID)) %>%
+  dplyr::relocate(FID_IID, .after = ID)
+
+# Save the QC clinical data
+saveRDS(DIGPD_final, "../Data_processed/Rfiles_modelFitting.automationOutline/DIGPD/DIGPD_final.rds")
+saveRDS(DIGPD_final_all, "../Data_processed/Rfiles_modelFitting.automationOutline/DIGPD/DIGPD_final_allVisits.rds")
+```
+
