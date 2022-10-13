@@ -1,0 +1,18 @@
+het_callrate.R
+--------------
+Find heterozygosity and sample rate missingness outliers
+
+
+pcs_plot.R
+----------
+Code to plot the PCs to come up with an effective SD threshold to consier outliers
+
+
+ancestry_outliers.R
+-------------------
+Code to find ancestry outliers
+
+
+genetic_qc.sh
+-------------
+This is the code to perform the genetic QC at the sample and genetic level
