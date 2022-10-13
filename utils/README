@@ -2,14 +2,17 @@ fun.dyngwas-final.R
 -----------------
 This is the SCEBE alogorithm -> https://github.com/Myuan2019/SCEBE
 
+
 chunkFileCreator.R
 ------------------
 Script to split the input .raw file with SNP information into k chunks of size n
 This is necessary to be able to load data into memory.
 
+
 GeneticChunks.R
 -----------------
 Script to split the .raw genetic file into 50K size chunks
+
 
 utils.R
 ------------
