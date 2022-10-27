@@ -588,3 +588,400 @@ results_psychEncode %>%
 
 
 
+# Redo against coloc
+
+
+
+```{r eval = FALSE}
+gwas_total = fread("TOTAL_metalQCed.txt")
+gwas_axial =fread("AXIAL_metalQCed.txt")
+
+
+# Extract maf, reformat
+gwas_axial <- gwas_axial %>% 
+  as_tibble() %>%
+  dplyr::select(SNP = MarkerName,
+                beta=Effect, p.value=`P-value`,
+                se=StdErr, maf = Freq1,
+                A1 = Allele1, A2 = Allele2,
+                TotalSampleSize) %>%
+  dplyr::mutate(GWAS = "axial_progression")
+
+gwas_total <- gwas_total %>% 
+  as_tibble() %>%
+  dplyr::select(SNP = MarkerName,
+                beta=Effect, p.value=`P-value`,
+                se=StdErr, maf = Freq1,
+                A1 = Allele1, A2 = Allele2,
+                TotalSampleSize) %>%
+  dplyr::mutate(GWAS = "total_progression")
+
+
+dbSNP = SNPlocs.Hsapiens.dbSNP144.GRCh37
+gwas = list(gwas_total, gwas_axial) %>%
+  map(~colochelpR::convert_rs_to_loc(.x, SNP_column = "SNP", dbSNP=dbSNP)) %>%
+  map(get_varbeta) %>%
+  map(function(x) 
+    x %>%
+      mutate(CHR = as.numeric(CHR),
+             BP = as.numeric(BP))
+
+# Deal with biallelic SNPs
+gwas_QC = map(gwas, function(x) 
+  x %>%
+    dplyr::filter(!(duplicated(SNP) | duplicated(SNP, fromLast = TRUE))) %>%
+    dplyr::bind_rows(x %>% 
+                       dplyr::filter(
+                         duplicated(SNP) | duplicated(SNP, fromLast = TRUE))
+                     %>%
+                       dplyr::group_by(SNP) %>% 
+                       dplyr::top_n(1, maf)) %>%
+      tidyr::separate(loc, into = c("CHR", "BP"))
+    )
+
+
+# save
+saveRDS(gwas_QC, "gwas_QC.rds")
+```
+
+
+# GET GENES
+
+```{r eval = FALSE}
+AXIAL_ensembl_gene_ids_overlapping <- gwas_QC[[2]] %>%
+  colochelpR::get_genes_within_1Mb_of_signif_SNPs(pvalue_column="p.value",
+                                                  CHR_column="CHR",
+                                                  BP_column="BP", 
+                                                  mart=37)
+
+TOTAL_ensembl_gene_ids_overlapping <- gwas_QC[[1]] %>%
+  get_genes_within_1Mb_of_signif_SNPs(pvalue_column="p.value",
+                                                  CHR_column="CHR",
+                                                  BP_column="BP",
+                                                  pval_thresh = 5e-7,
+                                                  mart=37)
+
+
+```
+
+
+# RUN COLOC AGAINST EQTL GENE
+
+```{r eval=FALSE, results="hide", warning=FALSE, message=FALSE}
+results_path = "/mnt/rreal/RDS/acarrasco/ANALYSES_WORKSPACE/EARLY_PD/POST_GWAS/COLOC_RSLOPES_V2"
+results_path_TOTAL <- make_results_dir(results_path = results_path,
+                                           folder_name = "TOTAL_eQTLgene")
+results_path_AXIAL <- make_results_dir(results_path = results_path,
+                                           folder_name = "AXIAL_eQTLgene")
+
+
+# I WANT TO TRY TO CORRECT THE DIRECTION OF THE EFFECTS IN THE AXIAL GWAS
+
+
+# Path to the GWAS we load
+AXIAL_path <- "/mnt/rreal/RDS/acarrasco/ANALYSES_WORKSPACE/EARLY_PD/POST_GWAS/COLOC_RSLOPES_V2/AXIAL_metalQCed.txt"
+TOTAL_path <- "/mnt/rreal/RDS/acarrasco/ANALYSES_WORKSPACE/EARLY_PD/POST_GWAS/COLOC_RSLOPES_V2/TOTAL_metalQCed.txt"
+eQTLgene_path <- "/mnt/rreal/RDS/acarrasco/COLLABS/DATA/eQTLgen/Full_eQTLgen_rsID.MAF.txt"
+eQTLgene <- fread(eQTLgene_path)
+
+
+df1_N = mean(as.numeric(gwas_QC[[2]]$TotalSampleSize)) %>% round
+for (index in seq_along(AXIAL_ensembl_gene_ids_overlapping)) {
+  ensembl_geneID <- AXIAL_ensembl_gene_ids_overlapping[index]
+  print(str_c(Sys.time(), " - ", index, " - ", ensembl_geneID))
+  ciseQTL_filtered <- eQTLgene %>%
+    dplyr::filter(Gene == ensembl_geneID) %>%
+    check_coloc_data_format(beta_or_pval = "pval", check_maf = TRUE) %>%
+    dplyr::filter(!duplicated(SNP))
+  
+  
+  if (nrow(ciseQTL_filtered) == 0) {
+    next
+  }
+  
+  if(any( (ciseQTL_filtered$maf <= 0) | (ciseQTL_filtered$maf >= 1) )) {
+    next
+  }
+  
+  
+  
+  df2_N = mean(ciseQTL_filtered$NrSamples)
+  # Subset from which I Calculate the proportion cases mean.
+  #df_subset <- survDementia_rsID_vbeta %>% dplyr::filter(SNP %in% ciseQTL_filtered$SNP) 
+  
+  coloc_results_annotated <- colochelpR::get_coloc_results(df1 = gwas_QC[[2]],
+                                                           df2 = ciseQTL_filtered, 
+                                                           df1_type = "quant",
+                                                           df2_type="quant",
+                                                           df1_beta_or_pval="beta",
+                                                           df2_beta_or_pval="pval", 
+                                                           df1_N = df1_N,
+                                                           df2_N = df2_N,
+                                                        annotate_signif_SNP_df1_df2 = T,
+                                                        key_cols = c("GWAS_1", "eQTL_2", 
+                                                                     "Gene_2"),
+                                                        df_1_name = "GWAS", 
+                                                        df_2_name = "eQTL",
+                                                        df1_path = AXIAL_path,
+                                                        df2_path=eQTLgene_path,
+                                                            p12 = 1e-5)
+  colochelpR::save_coloc_results(coloc_results_annotated, 
+                                 results_dir_path=results_path_AXIAL)
+
+  }
+
+
+df1_N = mean(as.numeric(gwas_QC[[1]]$TotalSampleSize)) %>% round
+for (index in seq_along(TOTAL_ensembl_gene_ids_overlapping)) {
+  ensembl_geneID <- TOTAL_ensembl_gene_ids_overlapping[index]
+  print(str_c(Sys.time(), " - ", index, " - ", ensembl_geneID))
+  ciseQTL_filtered <- eQTLgene %>%
+    dplyr::filter(Gene == ensembl_geneID) %>%
+    check_coloc_data_format(beta_or_pval = "pval", check_maf = TRUE) %>%
+    dplyr::filter(!duplicated(SNP))
+  
+  if (nrow(ciseQTL_filtered) == 0) {
+    next
+  }
+  
+  if (any( (ciseQTL_filtered$maf <= 0) | (ciseQTL_filtered$maf >= 1) )) {
+    next
+  }
+  
+  
+  
+  df2_N = mean(ciseQTL_filtered$NrSamples)
+  
+  # Subset from which I Calculate the proportion cases mean.
+  #df_subset <- survDementia_rsID_vbeta %>% dplyr::filter(SNP %in% ciseQTL_filtered$SNP) 
+  coloc_results_annotated <- colochelpR::get_coloc_results(df1 = gwas_QC[[1]],
+                                                           df2 = ciseQTL_filtered, 
+                                                           df1_type = "quant",
+                                                           df2_type="quant",
+                                                           df1_beta_or_pval="beta",
+                                                           df2_beta_or_pval="pval", 
+                                                           df1_N = df1_N,
+                                                           df2_N = df2_N,
+                                                        annotate_signif_SNP_df1_df2 = T,
+                                                        key_cols = c("GWAS_1", "eQTL_2", 
+                                                                     "Gene_2"),
+                                                        df_1_name = "GWAS", 
+                                                        df_2_name = "eQTL",
+                                                        df1_path = TOTAL_path,
+                                                        df2_path=eQTLgene_path,
+                                                            p12 = 1e-5)
+  colochelpR::save_coloc_results(coloc_results_annotated, 
+                                 results_dir_path=results_path_TOTAL)
+
+  }
+
+```
+
+## Print eQTL Gene results
+
+```{r}
+ensembl <- useEnsembl(biomart = "ensembl",
+                      dataset = "hsapiens_gene_ensembl", mirror = "www")
+
+
+results_eQTL <- merge_coloc_summaries("/mnt/rreal/RDS/acarrasco/ANALYSES_WORKSPACE/EARLY_PD/POST_GWAS/COLOC_RSLOPES_V2/TOTAL_eQTLgene",
+                                    add_signif_SNP = F, recursive = T, pattern = ".rda")
+mapping <- getBM(attributes = c("hgnc_symbol", "ensembl_gene_id"),
+                  filters = "ensembl_gene_id",
+                  values = results_eQTL$Gene_2,
+                  mart = ensembl)
+
+ results_eQTL <- results_eQTL %>% 
+   inner_join(mapping,by = c("Gene_2" = "ensembl_gene_id")) %>%
+   rename(HGNC = hgnc_symbol) %>%
+   relocate(HGNC, .after = Gene_2)
+   
+# SHowing the whole table
+datatable(results_eQTL, rownames = FALSE,
+          options = list(scrollX = TRUE),
+           class = 'white-space: nowrap')
+
+
+results_eQTL <- merge_coloc_summaries("/mnt/rreal/RDS/acarrasco/ANALYSES_WORKSPACE/EARLY_PD/POST_GWAS/COLOC_RSLOPES_V2/AXIAL_eQTLgene",
+                                    add_signif_SNP = F, recursive = T, pattern = ".rda")
+mapping <- getBM(attributes = c("hgnc_symbol", "ensembl_gene_id"),
+                  filters = "ensembl_gene_id",
+                  values = results_eQTL$Gene_2,
+                  mart = ensembl)
+
+ results_eQTL <- results_eQTL %>% 
+   inner_join(mapping,by = c("Gene_2" = "ensembl_gene_id")) %>%
+   rename(HGNC = hgnc_symbol) %>%
+   relocate(HGNC, .after = Gene_2)
+   
+# SHowing the whole table
+datatable(results_eQTL, rownames = FALSE,
+          options = list(scrollX = TRUE),
+           class = 'white-space: nowrap')
+  
+```
+
+
+# Coloc against PsychEncode df
+
+
+```{r eval = FALSE, results="hide", warning=FALSE, message=FALSE}
+
+results_path = "/mnt/rreal/RDS/acarrasco/ANALYSES_WORKSPACE/EARLY_PD/POST_GWAS/COLOC_RSLOPES_V2"
+results_path_TOTAL <- make_results_dir(results_path = results_path,
+                                           folder_name = "TOTAL_PSYCH")
+results_path_AXIAL <- make_results_dir(results_path = results_path,
+                                           folder_name = "AXIAL_PSYCH")
+
+
+# Path to the GWAS we load
+AXIAL_path <- "/mnt/rreal/RDS/acarrasco/ANALYSES_WORKSPACE/EARLY_PD/POST_GWAS/COLOC_RSLOPES_V2/AXIAL_metalQCed.txt"
+TOTAL_path <- "/mnt/rreal/RDS/acarrasco/ANALYSES_WORKSPACE/EARLY_PD/POST_GWAS/COLOC_RSLOPES_V2/TOTAL_metalQCed.txt"
+psychEnc_path <- "/mnt/rreal/RDS/acarrasco/COLLABS/DATA/PsychEncode/Full_hg19_cis-eQTL_rsID_MAF.txt"
+psychEncode <- fread(psychEnc_path)
+
+
+
+
+df1_N = mean(as.numeric(gwas_QC[[2]]$TotalSampleSize)) %>% round
+for (index in seq_along(AXIAL_ensembl_gene_ids_overlapping)) {
+  ensembl_geneID <- AXIAL_ensembl_gene_ids_overlapping[index]
+  print(str_c(Sys.time(), " - ", index, " - ", ensembl_geneID))
+  ciseQTL_filtered <- psychEncode %>%
+    dplyr::filter(Gene == ensembl_geneID) %>%
+    check_coloc_data_format(beta_or_pval = "pval", check_maf = TRUE) %>%
+    dplyr::filter(!duplicated(SNP))
+  
+   
+  if (nrow(ciseQTL_filtered) == 0) {
+     next
+   }
+   if(any(ciseQTL_filtered$maf <= 0 | ciseQTL_filtered$maf >= 1)) {
+     print("IN")
+     next
+   }
+  
+  df2_N = mean(ciseQTL_filtered$number_of_SNPs_tested, na.rm = T)
+  # Subset from which I Calculate the proportion cases mean.
+  #df_subset <- survDementia_rsID_vbeta %>% dplyr::filter(SNP %in% ciseQTL_filtered$SNP) 
+  
+  coloc_results_annotated <- colochelpR::get_coloc_results(df1 = gwas_QC[[2]],
+                                                           df2 = ciseQTL_filtered, 
+                                                           df1_type = "quant",
+                                                           df2_type="quant",
+                                                           df1_beta_or_pval="beta",
+                                                           df2_beta_or_pval="pval", 
+                                                           df1_N = df1_N,
+                                                           df2_N = df2_N,
+                                                        annotate_signif_SNP_df1_df2 = T,
+                                                        key_cols = c("GWAS_1", "eQTL_2", 
+                                                                     "Gene_2"),
+                                                        df_1_name = "GWAS", 
+                                                        df_2_name = "eQTL",
+                                                        df1_path = AXIAL_path,
+                                                        df2_path=psychEnc_path,
+                                                            p12 = 1e-5)
+  colochelpR::save_coloc_results(coloc_results_annotated, 
+                                 results_dir_path=results_path_AXIAL)
+
+  }
+
+
+df1_N = mean(as.numeric(gwas_QC[[1]]$TotalSampleSize)) %>% round
+for (index in seq_along(TOTAL_ensembl_gene_ids_overlapping)) {
+  ensembl_geneID <- TOTAL_ensembl_gene_ids_overlapping[index]
+  print(str_c(Sys.time(), " - ", index, " - ", ensembl_geneID))
+  ciseQTL_filtered <- psychEncode %>%
+    dplyr::filter(Gene == ensembl_geneID) %>%
+    check_coloc_data_format(beta_or_pval = "pval", check_maf = TRUE) %>%
+    dplyr::filter(!duplicated(SNP))
+  
+  if (nrow(ciseQTL_filtered) == 0) {
+    next
+  }
+  
+  if(any(ciseQTL_filtered$maf <= 0 | ciseQTL_filtered$maf >= 1)) {
+    next
+  }
+  
+   df2_N = mean(ciseQTL_filtered$number_of_SNPs_tested, na.rm = T)
+  
+  # Subset from which I Calculate the proportion cases mean.
+  #df_subset <- survDementia_rsID_vbeta %>% dplyr::filter(SNP %in% ciseQTL_filtered$SNP) 
+  coloc_results_annotated <- colochelpR::get_coloc_results(df1 = gwas_QC[[1]],
+                                                           df2 = ciseQTL_filtered, 
+                                                           df1_type = "quant",
+                                                           df2_type="quant",
+                                                           df1_beta_or_pval="beta",
+                                                           df2_beta_or_pval="pval", 
+                                                           df1_N = df1_N,
+                                                           df2_N = df2_N,
+                                                        annotate_signif_SNP_df1_df2 = T,
+                                                        key_cols = c("GWAS_1", "eQTL_2", 
+                                                                     "Gene_2"),
+                                                        df_1_name = "GWAS", 
+                                                        df_2_name = "eQTL",
+                                                        df1_path = TOTAL_path,
+                                                        df2_path=psychEnc_path,
+                                                            p12 = 1e-5)
+  colochelpR::save_coloc_results(coloc_results_annotated, 
+                                 results_dir_path=results_path_TOTAL)
+
+  }
+
+
+```
+
+
+```{r}
+ensembl <- useEnsembl(biomart = "ensembl",
+                      dataset = "hsapiens_gene_ensembl", mirror = "www")
+
+
+results_psychEncode <- merge_coloc_summaries("/mnt/rreal/RDS/acarrasco/ANALYSES_WORKSPACE/EARLY_PD/POST_GWAS/COLOC_RSLOPES_V2/TOTAL_PSYCH",
+                                 add_signif_SNP = F, recursive = T, pattern = ".rda")
+
+
+mapping <- getBM(attributes = c("hgnc_symbol", "ensembl_gene_id"),
+                 filters = "ensembl_gene_id",
+                 values = results_psychEncode$Gene_2,
+                 mart = ensembl)
+ 
+results_psychEncode <- results_psychEncode %>% 
+  inner_join(mapping,by = c("Gene_2" = "ensembl_gene_id")) %>%
+  rename(HGNC = hgnc_symbol) %>%
+  relocate(HGNC, .after = Gene_2)
+  
+
+# Showing the results with PP4 > 0.9 
+results_psychEncode %>% 
+  DT::datatable(rownames = FALSE,
+                options = list(scrollX = TRUE),
+                class = 'white-space: nowrap')
+
+
+
+results_psychEncode <- merge_coloc_summaries("/mnt/rreal/RDS/acarrasco/ANALYSES_WORKSPACE/EARLY_PD/POST_GWAS/COLOC_RSLOPES_V2/AXIAL_PSYCH",
+                                 add_signif_SNP = F, recursive = T, pattern = ".rda")
+
+
+mapping <- getBM(attributes = c("hgnc_symbol", "ensembl_gene_id"),
+                 filters = "ensembl_gene_id",
+                 values = results_psychEncode$Gene_2,
+                 mart = ensembl)
+ 
+results_psychEncode <- results_psychEncode %>% 
+  inner_join(mapping,by = c("Gene_2" = "ensembl_gene_id")) %>%
+  rename(HGNC = hgnc_symbol) %>%
+  relocate(HGNC, .after = Gene_2)
+  
+
+# Showing the results with PP4 > 0.9 
+results_psychEncode %>% 
+  DT::datatable(rownames = FALSE,
+                options = list(scrollX = TRUE),
+                class = 'white-space: nowrap')
+```
+
+
+
