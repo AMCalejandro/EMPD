@@ -55,7 +55,17 @@ getwd()
 # Description
 
 In this section, we use TPD cohort to explore the set of predictors that makes the model best according to R2, AIC, and BIC.
-
+The stratigy we follow can be summarised in the following steps:
+  - Load data ( clinical data, demographics, and PCs)
+  - Assess combination of covariates to use looking at percentage of variance explained form each PC
+  - Compare which is the best age covariate to use in the naalysis (AAB, AAD, AAO). For this, we asses which is the most singificantly associated with the outcome
+  - Do some minor data wrangling prior fitting mixed effect models and perform comparisons
+  - Fit the models
+    - Get the null, the basic model ( ie model adjusted by known confounders), and the model with time rslopes
+    - Test models with different fixed and random effects
+    - Summarise AIC, BIC, and Rsq metrics on a metrix for different models fitted
+  - Make decision on which is the best set of covariates according to the metricx reported on the matrix
+  
 
 
 # Data loading
