@@ -45,6 +45,16 @@ knitr::opts_chunk$set(echo = T, warning = F, message= F)
 
 > Aim: To get the data needed to perform our sensitivity analyses
 
+# Description
+
+In this notebook we get the data needed to perform our sensitivity analyses. To do so we do the following steps
+  - Load each cohort data
+  - We load the data from the levodopa challenge analysis from Tracking Parkinson's cohort
+  - Get the weights for the axial and limbs symptoms from the Ldop challenge data by splitting data into pre and post levodopa doses scores
+  - Adjust each axial, limb, and total motor scores from TPD, OPDC, PPMI, DIGPD, and PDBP cohorts using equation provided by Dr M.Lawton described in Methods.
+
+Once we derive these adjusted outcomes, we are ready to perform the model A and model B sensitivity analysis, by running step 8 on the workflow github directory.
+
 
 # Data loading
 ```{r}
@@ -426,4 +436,10 @@ saveRDS(PDBP_final_LEDD, "../Data_processed/ledd_adjusted/PDBP_LEDDadjusted_fina
 ```
 
 
+# Conclussion
+
+Once we get the LEDD adjusted outcomes, we can rerun code from the step 8 to get results on the workflow folder
+for linear mixed effects models A and B.
+This is the so called sensitivity analysis in the paper. The analysis we performed to get the main results, but this time using
+outcomes adjusted by levodopa usage.
 
