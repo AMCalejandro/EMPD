@@ -1,0 +1,773 @@
+---
+title: "coloc_metaBrain"
+author: "AMCalejandro"
+date: "18/4/2022"
+output:
+  html_document:
+    df_print: paged
+    highlight: kate
+    code_folding: hide
+    number_sections: yes
+    theme: spacelab
+    toc: yes
+    toc_float: yes
+---
+
+```{r results="hide", warning=FALSE, message=FALSE}
+.libPaths("/data/kronos/kronos/acarrasco/R_libs/")
+library(colochelpR)
+library(data.table)
+library(MafDb.1Kgenomes.phase3.hs37d5)
+library(tidyverse)
+library(coloc)
+library(biomaRt)
+library(SNPlocs.Hsapiens.dbSNP144.GRCh37)
+library(DT)
+```
+
+```{r setup, include=FALSE}
+theme_rhr <-  theme_bw(base_family = "Helvetica") +
+  theme(panel.grid.major.x = element_blank(),
+        legend.position = "right",
+        strip.text = element_text(size = 8),
+        strip.text.y = element_text(angle = 90),
+        axis.text.x = element_text(size = 8, angle = 90, hjust = 1, vjust = 0.5),
+        axis.text.y = element_text(size = 8),
+        axis.title.y = element_text(vjust = 0.6),
+        axis.title = element_text(size = 10),
+        panel.spacing = unit(0.1, "lines"))
+knitr::opts_chunk$set(echo = T, warning = F, message= F)
+```
+
+
+# Data loading and processing
+
+First we load and process metabrsin tissues
+
+```{r eval = FALSE}
+
+metabrain_cortex = fread("/mnt/rreal/RDS/eQTLdata/METABRAIN/CORTEX/2020-05-26-Cortex-EUR-1-biogenformat.txt.gz")
+metabrain_hipocampus = fread("/mnt/rreal/RDS/eQTLdata/METABRAIN/HIPOCAMPUS/2020-05-26-Hippocampus-EUR-1-biogenformat.txt.gz")
+metabrain_spinalcord = fread("/mnt/rreal/RDS/eQTLdata/METABRAIN/SPINALCORD/2020-05-26-Spinalcord-EUR-1-biogenformat.txt.gz")
+metabrain_cerebellum = fread("/mnt/rreal/RDS/eQTLdata/METABRAIN/CEREBELLUM/2020-05-26-Cerebellum-EUR-1-biogenformat.txt.gz")
+metabrain_basalganglia = fread("/mnt/rreal/RDS/eQTLdata/METABRAIN/BASALGANGLIA_EUR/2020-05-26-Basalganglia-EUR-1-biogenformat.txt.gz")
+
+
+metabrain_tissues = list(metabrain_cortex, metabrain_hipocampus, metabrain_basalganglia, metabrain_spinalcord, metabrain_cerebellum)
+metabrain_tissues = purrr::map(metabrain_tissues, function(x) x %>% 
+                                 rename(p.value = PValue) %>%
+                                 separate(SNPName, into = c("CHR","BP","SNP","REFALT"), sep=":") %>%
+                                 mutate(CHR = as.integer(CHR), BP = as.integer(BP),
+                                        ProbeName = gsub("\\..*","", x$ProbeName)))
+
+mafdb <- MafDb.1Kgenomes.phase3.hs37d5
+SNP_mafs =  function(SNP_vector) {
+  GenomicScores::gscores(x = mafdb, ranges = SNP_vector %>% as.character(), pop = "EUR_AF") %>% 
+  as.data.frame() %>%
+  tibble::rownames_to_column(var = "SNP") %>%
+  dplyr::rename(maf = EUR_AF) %>% 
+  dplyr::select(SNP, maf) %>%
+    dplyr::filter(maf < 0.5 )
+}
+
+SNPs = map(metabrain_tissues, function(x) x %>% distinct(SNP) %>% pull(SNP))
+snp_w_maf = map(SNPs, SNP_mafs)
+metabrain_tissues_maf = map2(metabrain_tissues, snp_w_maf, ~ .x %>% inner_join(.y))
+
+metabrain_tissues_maf = mapply(cbind, metabrain_tissues_maf, "eQTL" = "metabrain", SIMPLIFY=F)
+
+
+
+# Another keyQC is to get the number of samples per SNP
+sumSampleSize = function(string) {
+  unlist(regmatches(string, gregexpr("[[:digit:]]+", string))) %>% as.numeric %>% sum
+}
+
+
+
+for (i in 1:length(metabrain_tissues_maf)) {
+  df = metabrain_tissues_maf[[i]][,18]
+  NrSamples = apply(df, 1, sumSampleSize)
+  metabrain_tissues_maf[[i]] = cbind(metabrain_tissues_maf[[i]] , NrSamples)
+}
+
+
+
+metabrain_tissues_maf = 
+  map(metabrain_tissues_maf, function(x)
+    x %>% 
+      dplyr::rename("beta" = "Meta-Beta",
+                      "se" = "Meta-SE") %>%
+      colochelpR::get_varbeta(.)
+    )
+
+names(metabrain_tissues) <-
+  c("cortex_chr1", "hipocampus_chr1", "basalganglia_chr1", 
+    "spinalcord_chr1", "cerebellum_chr1")
+
+
+
+```
+
+
+
+Second we QC gwas data
+```{r eval = FALSE}
+# Loading raw GWAS data 
+
+# Extract maf, reformat
+gwas_axial <- gwas_axial %>% 
+  as_tibble() %>%
+  dplyr::select(SNP = MarkerName,
+                beta=Effect, p.value=`P-value`,
+                se=StdErr, maf = Freq1,
+                A1 = Allele1, A2 = Allele2,
+                TotalSampleSize) %>%
+  dplyr::mutate(GWAS = "axial_progression")
+
+gwas_total <- gwas_total %>% 
+  as_tibble() %>%
+  dplyr::select(SNP = MarkerName,
+                beta=Effect, p.value=`P-value`,
+                se=StdErr, maf = Freq1,
+                A1 = Allele1, A2 = Allele2,
+                TotalSampleSize) %>%
+  dplyr::mutate(GWAS = "total_progression")
+
+
+dbSNP = SNPlocs.Hsapiens.dbSNP144.GRCh37
+gwas = list(gwas_total, gwas_axial) %>%
+  map(~colochelpR::convert_rs_to_loc(.x, SNP_column = "SNP", dbSNP=dbSNP)) %>%
+  map(get_varbeta)  %>%
+  map(function(x) 
+    x %>%
+      mutate(CHR = as.numeric(CHR),
+             BP = as.numeric(BP))
+  )
+
+# Deal with biallelic SNPs
+gwas_QC = map(gwas, function(x) 
+  x %>%
+    dplyr::filter(!(duplicated(SNP) | duplicated(SNP, fromLast = TRUE))) %>%
+    dplyr::bind_rows(x %>% 
+                       dplyr::filter(
+                         duplicated(SNP) | duplicated(SNP, fromLast = TRUE))
+                     %>%
+                       dplyr::group_by(SNP) %>% 
+                       dplyr::top_n(1, maf)) %>%
+      tidyr::separate(loc, into = c("CHR", "BP"))
+    )
+
+
+```
+
+
+
+```{r eval = FALSE}
+gwas_QC = readRDS("/mnt/rreal/RDS/acarrasco/ANALYSES_WORKSPACE/EARLY_PD/POST_GWAS/COLOC_RSLOPES_V2/gwas_QC.rds") 
+
+# We load the axial GWAS
+gwas_QC = map(gwas_QC, function(x) 
+  x %>%
+  mutate(CHR = as.numeric(CHR),
+         BP = as.numeric(BP)) )
+gwas_axial = gwas_QC[[2]]
+
+
+# Load QC metabrain data _ chr 1
+
+# Load QC metabrain data ALL TISSUES
+cortex_chr1 = fread("metabrain_cortex_chr1.txt")
+hipocampus_chr1 = fread("metabrain_hipocampus_chr1.txt")
+basalganglia_chr1 = fread("metabrain_basalganglia_chr1.txt")
+spinalcord_chr1 = fread("metabrain_spinalcord_chr1.txt")
+cerebellum_chr1 = fread("metabrain_cerebellum_chr1..txt")
+
+metabrain_tissues = list(cortex_chr1, hipocampus_chr1,
+                         basalganglia_chr1, spinalcord_chr1,
+                         cerebellum_chr1)
+
+metabrain_tissues = 
+  map(metabrain_tissues, function(x)
+    x %>% 
+      dplyr::rename("beta" = "Meta-Beta",
+                      "se" = "Meta-SE") %>%
+      colochelpR::get_varbeta(.)
+    )
+
+names(metabrain_tissues) <-
+  c("cortex_chr1", "hipocampus_chr1", "basalganglia_chr1", 
+    "spinalcord_chr1", "cerebellum_chr1")
+
+
+```
+
+```{r eval = FALSE}
+get_genes_within_1Mb_of_signif_SNPs <- function(GWAS,
+                                                pvalue_column,
+                                                CHR_column,
+                                                BP_column,
+                                                pval_thresh = 5e-8,
+                                                chr_value,
+                                                mart = 38){
+  # tidy evaluation
+  pvalue_column_var <- rlang::sym(pvalue_column)
+  CHR_column_var <- rlang::sym(CHR_column)
+  BP_column_var <-  rlang::sym(BP_column)
+  
+
+  GWAS_signif_SNPs <-
+    GWAS %>%
+    dplyr::filter(!!pvalue_column_var <= pval_thresh) %>%
+    dplyr::filter(!!CHR_column_var == chr_value)
+    
+
+  GWAS_signif_SNPs_max_min_bp <-
+    GWAS_signif_SNPs %>%
+    dplyr::group_by(!!CHR_column_var) %>%
+    dplyr::filter(!!BP_column_var == max(!!BP_column_var) | !!BP_column_var == min(!!BP_column_var)) %>%
+    dplyr::mutate(signif_1Mb_window_min = !!BP_column_var - 1000000,
+                  signif_1Mb_window_max = !!BP_column_var + 1000000) %>%
+    dplyr::group_by(!!CHR_column_var) %>%
+    dplyr::summarise(seqnames = !!CHR_column_var %>% unique(),
+                     start = signif_1Mb_window_min %>% min(),
+                     end = signif_1Mb_window_max %>% max())
+
+  ensembl_all_genes_start_stop <-
+    .query_biomart(mart = mart, attributes = c("ensembl_gene_id", "chromosome_name", "start_position", "end_position"), filter = "ensembl_gene_id", values = "")
+
+  ensembl_all_genes_start_stop_gr <-
+    GenomicRanges::GRanges(
+      seqnames = ensembl_all_genes_start_stop[["chromosome_name"]],
+      ranges =IRanges::IRanges(start =  ensembl_all_genes_start_stop[["start_position"]], end = ensembl_all_genes_start_stop[["end_position"]]),
+      strand = "*",
+      ensembl_gene_id = ensembl_all_genes_start_stop[["ensembl_gene_id"]])
+
+  GWAS_signif_SNPs_max_min_bp_gr <-
+    GenomicRanges::GRanges(
+      seqnames = GWAS_signif_SNPs_max_min_bp$seqnames,
+      ranges = IRanges::IRanges(start = GWAS_signif_SNPs_max_min_bp$start,
+                       end = GWAS_signif_SNPs_max_min_bp$end),
+      strand = "*"
+    )
+
+  overlaps_hits <-
+    GenomicRanges::findOverlaps(GWAS_signif_SNPs_max_min_bp_gr, ensembl_all_genes_start_stop_gr, minoverlap = 1, type = "any")
+
+  ensembl_all_genes_start_stop_gr_overlapping <- ensembl_all_genes_start_stop_gr[overlaps_hits %>% S4Vectors::subjectHits()]
+
+  ensembl_gene_ids_overlapping_1Mb_window_hit <- ensembl_all_genes_start_stop_gr_overlapping$ensembl_gene_id %>%
+    unique()
+
+  return(ensembl_gene_ids_overlapping_1Mb_window_hit)
+
+}
+
+
+.query_biomart <- function(mart = 38, attributes, filter, values){
+
+  if(mart != 38 && mart != 37) stop("Mart must be 38 or 37...")
+
+  if(mart == 38){
+
+    ensembl_mart <-
+      biomaRt::useMart(biomart = "ENSEMBL_MART_ENSEMBL", dataset = "hsapiens_gene_ensembl")
+
+  }else if(mart == 37){
+
+    ensembl_mart <-
+      biomaRt::useMart(host = "grch37.ensembl.org", biomart = "ENSEMBL_MART_ENSEMBL", dataset = "hsapiens_gene_ensembl")
+
+  }
+
+  # BioMart search
+  biomart_query <- biomaRt::getBM(attributes = attributes, filters = filter, values = values , mart = ensembl_mart)
+
+  return(biomart_query)
+
+}
+
+#' Dataframe-based biomart query.
+#'
+#' @param dataframe Dataframe with gene names.
+#' @param columnToFilter Name of column in dataframe, which contains gene names.
+#' @param mart Specify genome build.
+#' @param attributes Vector of attributes to extract from BioMart.
+#' @param filter Vector of filter to be used for BioMart query.
+#'
+#' @return Original dataframe together with extracted biomart query.
+#' @export
+#'
+
+biomart_df <- function(dataframe, columnToFilter, mart = 38, attributes, filter){
+
+  if(mart != 38 && mart != 37) stop("Mart must be 38 or 37...")
+
+  if(mart == 38){
+
+    ensembl_mart <-
+      biomaRt::useMart(biomart = "ENSEMBL_MART_ENSEMBL", dataset = "hsapiens_gene_ensembl")
+
+  }else if(mart == 37){
+
+    ensembl_mart <-
+      biomaRt::useMart(host = "grch37.ensembl.org", biomart = "ENSEMBL_MART_ENSEMBL", dataset = "hsapiens_gene_ensembl")
+
+  }
+
+  # Query genes as a vector
+  genes <- dataframe %>% .[[columnToFilter]] %>% unique()
+  print(str_c("Number of unique genes to search: ", length(genes)))
+
+  # BioMart search
+  biomart_query <- biomaRt::getBM(attributes = attributes, filters = filter, values = genes , mart = ensembl_mart)
+  print(str_c("Number of matches found:", nrow(biomart_query)))
+
+  # Create new data frame with positional information + remainder of the original dataframe
+  # First requires creating join vector for the by argument in inner_join
+  join_vector <- filter
+  names(join_vector) <- columnToFilter
+  merged <- dplyr::inner_join(dataframe, biomart_query, by = join_vector)
+
+  return(merged)
+
+}
+```
+
+
+
+# Get genes within +-1MB from lead SNPs
+
+We modify the function as we are just doing coloc for the hit in chromosome 1
+```{r eval = FALSE}
+AXIAL_ensembl_gene_ids_overlapping <- gwas_QC[[2]] %>%
+  get_genes_within_1Mb_of_signif_SNPs(pvalue_column="p.value",
+                                                  CHR_column="CHR",
+                                                  BP_column="BP", 
+                                                  chr_value = 1,
+                                                  pval_thresh = 5e-8,
+                                                  mart=37)
+```
+
+
+```{r eval = FALSE}
+# Path to the results directory
+results_path = "/mnt/rreal/RDS/acarrasco/ANALYSES_WORKSPACE/EARLY_PD/POST_GWAS/COLOC_RSLOPES_V2"
+results_path_AXIAL <- make_results_dir(results_path = results_path,
+                                       folder_name = "AXIAL_METABRAIN")
+
+# Path to the GWAS we load
+gwas_axial_path <- "/mnt/rreal/RDS/acarrasco/ANALYSES_WORKSPACE/EARLY_PD/POST_GWAS/COLOC_RSLOPES_V2/AXIAL_metalQCed.txt"
+metabrain_path <- "/mnt/rreal/RDS/eQTLdata/METABRAIN/"
+
+
+coloc_metabrain = function(tissue, gene_ids, gwas, name_tissue) {
+  # We get the name of the tissue and create a new folder for it
+  results_path_tissue = make_results_dir(results_path= results_path_AXIAL,
+                                       folder_name = name_tissue)
+  
+  df1_N = mean(as.numeric(gwas$TotalSampleSize)) %>% round
+
+  for (index in seq_along(gene_ids)) {
+    ensembl_geneID <- gene_ids[index]
+    print(str_c(Sys.time(), " - ", index, " - ", ensembl_geneID))
+    metabrain_filtered <- tissue %>%
+    dplyr::filter(ProbeName == ensembl_geneID) %>%
+    check_coloc_data_format(beta_or_pval = "beta", check_maf = TRUE) %>%
+    dplyr::filter(!duplicated(SNP))
+    
+    if (nrow(metabrain_filtered) == 0) {
+      print("IN")
+      next
+    }
+    
+    if(any( (metabrain_filtered$maf <= 0) | (metabrain_filtered$maf >= 1) )) {
+      if (length((metabrain_filtered$maf <= 0) | (metabrain_filtered$maf >= 1)) >= 1000) {
+        warning("More than 1000 wrong MAFs found")
+      }
+      
+      metabrain_filtered = metabrain_filtered %>%
+        filter(!(maf <= 0 | maf >= 1) )
+    }
+    
+    df2_N = mean(as.numeric(metabrain_filtered$NrSamples)) %>% round
+    
+    coloc_results_annotated <- colochelpR::get_coloc_results(df1 = gwas,
+                                                           df2 = metabrain_filtered, 
+                                                           df1_type = "quant",
+                                                           df2_type="quant",
+                                                           df1_beta_or_pval="beta",
+                                                           df2_beta_or_pval="beta", 
+                                                           df1_N = df1_N, #For quant
+                                                           df2_N = df2_N, # Total sample size for cortex from meta brain
+                                                            annotate_signif_SNP_df1_df2 = T,
+                                                        key_cols = c("GWAS_1", "eQTL_2",
+                                                                    "ProbeName_2"),
+                                                        df_1_name = "GWAS", 
+                                                        df_2_name = "eQTL",
+                                                        df1_path = gwas_axial_path,
+                                                        df2_path= metabrain_path,
+                                                            p12 = 1e-5)
+    colochelpR::save_coloc_results(coloc_results_annotated, 
+                                 results_dir_path= results_path_tissue)
+  }
+  
+}
+
+
+
+for (i in 1:length(metabrain_tissues)) {
+  name_tissue = names(metabrain_tissues[i])
+  tissue = metabrain_tissues[[i]]
+  coloc_metabrain(tissue = tissue,
+                  name_tissue = name_tissue,
+                  gwas = gwas_axial,
+                  gene_ids = AXIAL_ensembl_gene_ids_overlapping)
+  
+}
+```
+
+
+
+
+
+```{r}
+results_path = "/mnt/rreal/RDS/acarrasco/ANALYSES_WORKSPACE/EARLY_PD/POST_GWAS/COLOC_RSLOPES_V2"
+results_path_AXIAL <- make_results_dir(results_path = results_path,
+                                       folder_name = "AXIAL_METABRAIN")
+
+ensembl <- useEnsembl(biomart = "ensembl",
+                      dataset = "hsapiens_gene_ensembl", mirror = "www")
+
+see_results = function(dir_name) {
+    results_eQTL <- merge_coloc_summaries(paste0(results_path_AXIAL,"/",dir_name),
+                                    add_signif_SNP = F,
+                                    recursive = T,
+                                    pattern = ".rda")
+    
+    mapping <- getBM(attributes = c("hgnc_symbol", "ensembl_gene_id"),
+                  filters = "ensembl_gene_id",
+                  values = results_eQTL$ProbeName_2,
+                  mart = ensembl)
+    
+    results_eQTL <- results_eQTL %>% 
+    inner_join(mapping,by = c("ProbeName_2" = "ensembl_gene_id")) %>%
+    rename(HGNC = hgnc_symbol) %>%
+    relocate(HGNC, .after = ProbeName_2)
+    
+    
+    datatable(results_eQTL  %>% arrange(desc(PP.H4.abf)), rownames = FALSE,
+          options = list(scrollX = TRUE),
+           class = 'white-space: nowrap')
+
+}
+
+all_tissues = list.files(results_path_AXIAL)
+
+htmltools::tagList(
+    lapply(all_tissues, see_results))
+
+
+#for (i in 1:length(all_tissues)) {
+#   tissue = all_tissues[[i]]
+#   res = see_results(tissue)
+#   # SHowing the whole table
+#    print(datatable(res %>% arrange(desc(PP.H4.abf)), rownames = FALSE,
+#          options = list(scrollX = TRUE),
+#           class = 'white-space: nowrap'))
+#}
+
+```
+
+
+# Redo analysis against MAD1L1 and LINC00511 hits
+
+# Strategy
+
+1. We are going to get all genes within 1Mb from lead SNP in each loci.
+Then, we are going to run coloc for each gene using MetaBrain data from cortex tissue
+
+2. We are going to perform a sensitivity analysis using coloc to understand the per hypothessis prior probabilities we get according to the default per SNP priors
+
+3. We will re run coloc adjusting priors so that per hypothesis priors are on a sensible range
+
+
+# Set up
+
+## Load data
+
+```{r eval=FALSE}
+gwas_qc = fread("/mnt/rreal/RDS/acarrasco/ANALYSES_WORKSPACE/EARLY_PD/POST_GWAS/AXIAL_modelBasic/COLOC/harmonised_axial_GWAS.txt")
+# Path to eQTl data rom MetaBrain
+meta_path = "/mnt/rreal/RDS/DATA/eQTLdata/METABRAIN/METABRAIN_QC/CORTEX/"
+```
+
+
+# Getting the genes in +-1MB window
+
+We need to extract all the genes within +/- 1 Mb of all significant hits in the progression to dementia GWAS.
+We will come up with a list of genes, handy to access metabrin chunks later
+
+```{r eval=FALSE}
+sign_split = gwas_qc %>%  
+  filter(p.value < 5e-7)  %>%
+  split(f = as.character(.$CHR))
+  
+mygenes = sapply(names(sign_split), function(x)
+  get_genes_within_1Mb_of_signif_SNPs(GWAS = sign_split[[x]],
+                                      pvalue_column="p.value",
+                                      CHR_column="CHR",
+                                      BP_column="BP", 
+                                      pval_thresh = 5e-7,
+                                      mart=37),
+  USE.NAMES = TRUE)
+```
+
+
+
+# Run coloc
+
+## Run colod using the default priors
+
+```{r eval=FALSE}
+
+results_path = "/mnt/rreal/RDS/acarrasco/ANALYSES_WORKSPACE/EARLY_PD/POST_GWAS/AXIAL_modelBasic/COLOC/"
+results_path_GWAS_eQTL <- 
+  make_results_dir(results_path = results_path,
+                   folder_name = "RESULTS_METABRAIN")
+# Path to the GWAS we load
+GWAS_path <- "/mnt/rreal/RDS/acarrasco/ANALYSES_WORKSPACE/EARLY_PD/POST_GWAS/AXIAL_modelBasic/COLOC/harmonised_axial_GWAS.txt"
+
+
+df1_N = ceiling(mean(gwas_qc$TotalSampleSize))
+for (i in seq_along(mygenes)){
+  
+  metabrain_path = paste0(meta_path, "QCed_2020-05-26-Cortex-EUR-",
+                          names(mygenes)[i],"-biogenformat.txt.gz")
+  
+  # Load meta brain and do some QC
+  metabrain = fread(metabrain_path)
+  metabrain = metabrain %>%
+    mutate(ProbeName = gsub("\\..*", "", ProbeName)) %>%
+    dplyr::rename(p.value = PValue,
+                  maf = MAF)
+  
+  # get rsid 
+  snpname =
+    as.data.frame(stringr::str_split_fixed(metabrain$SNPName, n = 4, pattern = ":"))
+  metabrain$SNP = snpname$V3
+  
+  
+  # Store genes in chromosome chunk and interate
+  genes = mygenes[[i]]
+  
+  for (index in seq_along(genes)) {
+    ensembl_geneID <- genes[index]
+    print(str_c(Sys.time(), " - ", index, " - ", ensembl_geneID))
+    metabrain_filtered <- metabrain %>%
+      dplyr::filter(ProbeName == ensembl_geneID) %>%
+      check_coloc_data_format(beta_or_pval = "pval", check_maf = TRUE) %>%
+      dplyr::filter(!duplicated(SNP))
+    
+    # get metabrain SS
+    df2_N = ceiling(mean(metabrain_filtered$NrSamples))
+    
+    if (nrow(metabrain_filtered) == 0) {
+      next
+    }
+    
+  # Subset from which I Calculate the proportion cases mean.
+  #df_subset <- survDementia_rsID_vbeta %>% dplyr::filter(SNP %in% ciseQTL_filtered$SNP) 
+  
+  coloc_results_annotated <- colochelpR::get_coloc_results(df1 = gwas_qc,
+                                                           df2 = metabrain_filtered, 
+                                                           df1_type = "quant",
+                                                           df2_type="quant",
+                                                           df1_beta_or_pval="beta",
+                                                           df2_beta_or_pval="pval", 
+                                                           df1_N = df1_N,
+                                                           df2_N = df2_N,
+                                                        annotate_signif_SNP_df1_df2 = T,
+                                                        key_cols = c("GWAS_1", "eQTL_2",
+                                                                    "ProbeName_2"),
+                                                        df_1_name = "GWAS",
+                                                        df_2_name = "eQTL",
+                                                        df1_path = GWAS_path,
+                                                        df2_path= metabrain_path,
+                                                            p12 = 1e-5)
+  colochelpR::save_coloc_results(coloc_results_annotated, 
+                                 results_dir_path=results_path_GWAS_eQTL)
+  }
+}
+
+
+```
+
+
+```{r}
+results_eQTL <- merge_coloc_summaries("RESULTS_METABRAIN",
+                                    add_signif_SNP = F, recursive = T, pattern = ".rda")
+
+ensembl <- useEnsembl(biomart = "ensembl",
+                      dataset = "hsapiens_gene_ensembl", mirror = "www")
+
+
+mapping <- getBM(attributes = c("hgnc_symbol", "ensembl_gene_id"),
+                  filters = "ensembl_gene_id",
+                  values = results_eQTL$ProbeName_2,
+                  mart = ensembl)
+ 
+ results_eQTL <- results_eQTL %>% 
+   inner_join(mapping, by = c("ProbeName_2" = "ensembl_gene_id")) %>%
+   dplyr::rename(HGNC = hgnc_symbol) %>%
+   dplyr::relocate(HGNC, .after = ProbeName_2)
+   
+# SHowing the whole table
+datatable(results_eQTL, rownames = FALSE,
+          options = list(scrollX = TRUE),
+           class = 'white-space: nowrap')
+
+fwrite(results_eQTL, "RESULTS_METABRAIN_colocdf.txt",
+       col.names = T, row.names =F, sep = "\t", quote = F)
+```
+
+
+
+## Run coloc adjusting the priors according to the number of overlapping snps
+
+We want to adjust the per snp priors so that the per hyptohesis priors remain on a sensible range
+
+With this, we just try to mirror the SNP priors defined by Wallace, the author, based on 1000 SNPs
+
+
+```{r eval=FALSE}
+results_path = "/mnt/rreal/RDS/acarrasco/ANALYSES_WORKSPACE/EARLY_PD/POST_GWAS/AXIAL_modelBasic/COLOC/"
+results_path_GWAS_eQTL <- make_results_dir(results_path = results_path,
+                                           folder_name = "RESULTS_METABRAIN_NEWPRIORS")
+# Path to the GWAS we load
+GWAS_path <- "/mnt/rreal/RDS/acarrasco/COLLABS/FOR_RAQUEL/DATA/Raquel_LRP1B_progToDementia/QC_COLOC.txt"
+
+
+df1_N = ceiling(mean(gwas_qc$TotalSampleSize))
+
+for (i in seq_along(mygenes)){
+  
+  metabrain_path = paste0(meta_path, "QCed_2020-05-26-Cortex-EUR-",
+                          names(mygenes)[i],"-biogenformat.txt.gz")
+  
+  # Load meta brain and do some QC
+  metabrain = fread(metabrain_path)
+  metabrain = metabrain %>%
+    mutate(ProbeName = gsub("\\..*", "", ProbeName)) %>%
+    dplyr::rename(p.value = PValue,
+                  maf = MAF)
+  
+  # get rsid 
+  snpname =
+    as.data.frame(stringr::str_split_fixed(metabrain$SNPName, n = 4, pattern = ":"))
+  metabrain$SNP = snpname$V3
+  
+  
+  # Store genes in chromosome chunk and interate
+  genes = mygenes[[i]]
+  
+  for (index in seq_along(genes)) {
+    ensembl_geneID <- genes[index]
+    print(str_c(Sys.time(), " - ", index, " - ", ensembl_geneID))
+    metabrain_filtered <- metabrain %>%
+      dplyr::filter(ProbeName == ensembl_geneID) %>%
+      check_coloc_data_format(beta_or_pval = "pval", check_maf = TRUE) %>%
+      dplyr::filter(!duplicated(SNP))
+    
+    # get metabrain SS
+    df2_N = ceiling(mean(metabrain_filtered$NrSamples))
+    
+    if (nrow(metabrain_filtered) == 0) {
+      next
+    }
+    
+  # Subset from which I Calculate the proportion cases mean.
+  #df_subset <- survDementia_rsID_vbeta %>% dplyr::filter(SNP %in% ciseQTL_filtered$SNP) 
+  
+  coloc_results_annotated <- colochelpR::get_coloc_results(df1 = gwas_qc,
+                                                           df2 = metabrain_filtered, 
+                                                           df1_type = "quant",
+                                                           df2_type="quant",
+                                                           df1_beta_or_pval="beta",
+                                                           df2_beta_or_pval="pval", 
+                                                           df1_N = df1_N,
+                                                           df2_N = df2_N,
+                                                        annotate_signif_SNP_df1_df2 = T,
+                                                        key_cols = c("GWAS_1", "eQTL_2",
+                                                                    "ProbeName_2"),
+                                                        df_1_name = "GWAS",
+                                                        df_2_name = "eQTL",
+                                                        df1_path = GWAS_path,
+                                                        df2_path= metabrain_path,
+                                                            p12 = 1e-7, p1 = 2e-5, p2 = 2e-5)
+  colochelpR::save_coloc_results(coloc_results_annotated, 
+                                 results_dir_path=results_path_GWAS_eQTL)
+  }
+}
+
+
+```
+
+
+```{r}
+results_eQTL <- merge_coloc_summaries("RESULTS_METABRAIN_NEWPRIORS",
+                                    add_signif_SNP = F, recursive = T, pattern = ".rda")
+
+ensembl <- useEnsembl(biomart = "ensembl",
+                      dataset = "hsapiens_gene_ensembl", mirror = "www")
+
+
+mapping <- getBM(attributes = c("hgnc_symbol", "ensembl_gene_id"),
+                  filters = "ensembl_gene_id",
+                  values = results_eQTL$ProbeName_2,
+                  mart = ensembl)
+ 
+ results_eQTL <- results_eQTL %>% 
+   inner_join(mapping, by = c("ProbeName_2" = "ensembl_gene_id")) %>%
+   dplyr::rename(HGNC = hgnc_symbol) %>%
+   dplyr::relocate(HGNC, .after = ProbeName_2)
+   
+# SHowing the whole table
+datatable(results_eQTL, rownames = FALSE,
+          options = list(scrollX = TRUE),
+          class = 'white-space: nowrap')
+
+fwrite(results_eQTL, "progtoDementia_METABRAIN_colocdf_NEWPRIORS.txt",
+       col.names = T, row.names =F, sep = "\t", quote = F)
+        
+```
+
+
+# Sensitivity analysis
+
+We perform a sensitivity analysis for LRP1B
+
+```{r}
+load("/mnt/rreal/RDS/acarrasco/ANALYSES_WORKSPACE/EARLY_PD/POST_GWAS/AXIAL_modelBasic/COLOC/RESULTS_METABRAIN/axial_progression_eQTL_CORTEX_ENSG00000002822.rda")
+sensitivity(coloc_results_annotated, rule = "H4 > 0.5")
+coloc_results_annotated
+
+```
+
+
+```{r}
+load("/mnt/rreal/RDS/acarrasco/ANALYSES_WORKSPACE/EARLY_PD/POST_GWAS/AXIAL_modelBasic/COLOC/RESULTS_METABRAIN_NEWPRIORS/axial_progression_eQTL_CORTEX_ENSG00000002822.rda")
+sensitivity(coloc_results_annotated, rule = "H4 > 0.5")
+coloc_results_annotated
+
+```
+
+
+# Session info
+
+```{r}
+sessionInfo()
+```
+
+
+
